@@ -1,28 +1,29 @@
 import asyncio
 import datetime
 import random
-import re
 import time
+from enum import IntEnum, auto
 from functools import cmp_to_key
 
-try:
-    import jieba_fast.analyse as jieba_analyse
-except ImportError:
-    import jieba.analyse as jieba_analyse
-from typing import List, Union, Optional, Tuple
-from enum import IntEnum, auto
 from nonebot import get_adapter
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageSegment, ActionFailed, Adapter
-from tortoise.functions import Count
-from .models import ChatBlackList, ChatContext, ChatAnswer, ChatMessage
-from .config import (
-    config_manager,
-    SUPERUSERS,
-    NICKNAME,
-    COMMAND_START,
-    log_info,
-    log_debug,
+from nonebot.adapters.milky import (
+    Adapter,
+    MessageSegment,
 )
+from nonebot.adapters.milky.event import GroupMessageEvent
+from nonebot.adapters.milky.exception import ActionFailed
+from nonebot_plugin_orm import get_session
+from sqlalchemy import delete, func, select
+
+from .config import (
+    COMMAND_START,
+    NICKNAME,
+    SUPERUSERS,
+    config_manager,
+    log_debug,
+    log_info,
+)
+from .models import ChatAnswer, ChatBlackList, ChatContext, ChatMessage
 
 chat_config = config_manager.config
 
@@ -60,44 +61,37 @@ class LearningChat:
         if event.reply:
             self.reply = event.reply
             self.data = ChatMessage(
-                group_id=event.group_id,
-                user_id=event.user_id,
-                message_id=event.message_id,
-                message=re.sub(
-                    r"(\[CQ:at,qq=.+])|(\[CQ:reply,id=.+])",
-                    "",
-                    re.sub(r"(,subType=\d+,url=.+])", r"]", event.raw_message),
-                ).strip(),
-                raw_message=event.raw_message,
+                group_id=event.data.peer_id,
+                user_id=event.data.sender_id,
+                message_id=event.data.message_seq,
+                message=''.join([str(s) for s in event.data.message if s.is_text()]),
+                raw_message=event.get_plaintext(),
                 plain_text=event.get_plaintext(),
                 time=event.time,
             )
         else:
             self.data = ChatMessage(
-                group_id=event.group_id,
-                user_id=event.user_id,
-                message_id=event.message_id,
-                message=re.sub(
-                    r"(\[CQ:at,qq=.+])",
-                    "",
-                    re.sub(r"(,subType=\d+,url=.+])", r"]", event.raw_message),
-                ).strip(),
-                raw_message=event.raw_message,
+                group_id=event.data.peer_id,
+                user_id=event.data.sender_id,
+                message_id=event.data.message_seq,
+                message=''.join([str(s) for s in event.data.message if s.is_text()]),
+                raw_message=event.get_plaintext(),
                 plain_text=event.get_plaintext(),
                 time=event.time,
             )
             self.reply = None
         self.bot_id = event.self_id
         self.to_me = event.to_me or NICKNAME in self.data.message
-        self.role = "superuser" if event.user_id in SUPERUSERS else event.sender.role
+        assert event.data.group_member is not None
+        self.role = "superuser" if event.get_user_id() in SUPERUSERS else event.data.group_member.role
         self.config = config_manager.get_group_config(self.data.group_id)
         self.ban_users = set(chat_config.ban_users + self.config.ban_users)
         self.ban_words = set(chat_config.ban_words + self.config.ban_words)
 
     async def _learn(self) -> Result:
-        if self.to_me and any(w in self.data.message for w in {"学说话", "快学", "开启学习"}):
+        if self.to_me and any(w in self.data.message for w in ("学说话", "快学", "开启学习")):
             return Result.SetEnable
-        elif self.to_me and any(w in self.data.message for w in {"闭嘴", "别学", "关闭学习"}):
+        elif self.to_me and any(w in self.data.message for w in ("闭嘴", "别学", "关闭学习")):
             return Result.SetDisable
         elif not chat_config.total_enable or not self.config.enable:
             log_debug("群聊学习", f"➤该群<m>{self.data.group_id}</m>未开启群聊学习，跳过")
@@ -111,7 +105,7 @@ class LearningChat:
             # 发言人在屏蔽列表中，跳过
             log_debug("群聊学习", f"➤发言人<m>{self.data.user_id}</m>在屏蔽列表中，跳过")
             return Result.Pass
-        elif self.to_me and any(w in self.data.message for w in {"不可以", "达咩", "不能说这"}):
+        elif self.to_me and any(w in self.data.message for w in ("不可以", "达咩", "不能说这")):
             # 如果是对某句话进行禁言
             return Result.Ban
         elif not await self._check_allow(self.data):
@@ -121,9 +115,11 @@ class LearningChat:
         elif self.reply:
             # 如果是回复消息
             if not (
-                message := await ChatMessage.filter(
-                    message_id=self.reply.message_id
-                ).first()
+                message := await self.session.scalar(
+                    select(ChatMessage)
+                    .where(ChatMessage.message_id == self.reply.message_seq)
+                    .limit(1)
+                )
             ):
                 # 回复的消息在数据库中有记录
                 log_debug("群聊学习", "➤回复的消息不在数据库中，跳过")
@@ -139,9 +135,19 @@ class LearningChat:
             # 则将该回复作为该消息的答案
             await self._set_answer(message)
             return Result.Learn
-        elif messages := await ChatMessage.filter(
-            group_id=self.data.group_id, time__gte=self.data.time - 3600
-        ).limit(5):
+        elif (
+            messages := (
+                await self.session.scalars(
+                    select(ChatMessage)
+                    .where(
+                        ChatMessage.group_id == self.data.group_id,
+                        ChatMessage.time >= self.data.time - 3600,
+                    )
+                    .order_by(ChatMessage.time.desc())
+                    .limit(5)
+                )
+            ).all()
+        ):
             # 获取本群一个小时内的最后5条消息
             if messages[0].message == self.data.message:
                 # 判断是否为复读中
@@ -171,17 +177,25 @@ class LearningChat:
             # 不符合任何情况，跳过
             return Result.Pass
 
-    async def answer(self) -> Optional[List[Union[MessageSegment, str]]]:
+    async def answer(self) -> list[MessageSegment | str] | None:
         """获取这句话的回复"""
+        self.session = get_session(expire_on_commit=False)
+        try:
+            return await self._answer()
+        finally:
+            await self.session.close()
+
+    async def _answer(self) -> list[MessageSegment | str] | None:
         result = await self._learn()
-        await self.data.save()
+        self.session.add(self.data)
+        await self.session.commit()
         if result == Result.Ban:
             # 禁用某句话
             if self.role not in {"superuser", "admin", "owner"}:
                 # 检查权限
                 return [random.choice(NO_PERMISSION_WORDS)]
             if self.reply:
-                ban_result = await self._ban(message_id=self.reply.message_id)
+                ban_result = await self._ban(message_id=self.reply.message_seq)
             else:
                 ban_result = await self._ban()
             if ban_result:
@@ -209,20 +223,33 @@ class LearningChat:
             return None
         elif result == Result.Repeat:
             if (
-                await ChatMessage.filter(
-                    group_id=self.data.group_id, time__gte=self.data.time - 3600
+                await self.session.scalar(
+                    select(ChatMessage.id)
+                    .where(
+                        ChatMessage.group_id == self.data.group_id,
+                        ChatMessage.time >= self.data.time - 3600,
+                        ChatMessage.user_id == self.bot_id,
+                        ChatMessage.message == self.data.message,
+                    )
+                    .limit(1)
                 )
-                .limit(self.config.repeat_threshold + 5)
-                .filter(user_id=self.bot_id, message=self.data.message)
-                .exists()
+                is not None
             ):
                 # 如果在阈值+5条消息内，bot已经回复过这句话，则跳过
                 log_debug("群聊学习", "➤➤已经复读过了，跳过")
                 return None
             if not (
-                messages := await ChatMessage.filter(
-                    group_id=self.data.group_id, time__gte=self.data.time - 3600
-                ).limit(self.config.repeat_threshold)
+                messages := (
+                    await self.session.scalars(
+                        select(ChatMessage)
+                        .where(
+                            ChatMessage.group_id == self.data.group_id,
+                            ChatMessage.time >= self.data.time - 3600,
+                        )
+                        .order_by(ChatMessage.time.desc())
+                        .limit(self.config.repeat_threshold)
+                    )
+                ).all()
             ):
                 return None
             # 如果达到阈值，且不是全都为同一个人在说，则进行复读
@@ -244,7 +271,11 @@ class LearningChat:
                 log_debug("群聊学习", "➤➤消息过短，不回复")
                 return None
             if not (
-                context := await ChatContext.filter(keywords=self.data.keywords).first()
+                context := await self.session.scalar(
+                    select(ChatContext)
+                    .where(ChatContext.keywords == self.data.keywords)
+                    .limit(1)
+                )
             ):
                 log_debug("群聊学习", "➤➤尚未有已学习的回复，不回复")
                 return None
@@ -275,22 +306,31 @@ class LearningChat:
                 f"➤➤本次回复阈值为<m>{answer_count_threshold}</m>，跨群阈值为<m>{cross_group_threshold}</m>",
             )
             # 获取满足跨群条件的回复
-            answers_cross = await ChatAnswer.filter(
-                context=context,
-                count__gte=answer_count_threshold,
-                keywords__in=await ChatAnswer.annotate(cross=Count("keywords"))
-                .group_by("keywords")
-                .filter(cross__gte=cross_group_threshold)
-                .values_list("keywords", flat=True),
-            )
+            answers_cross = (
+                await self.session.scalars(
+                    select(ChatAnswer).where(
+                        ChatAnswer.context_id == context.id,
+                        ChatAnswer.count >= answer_count_threshold,
+                        ChatAnswer.keywords.in_(
+                            select(ChatAnswer.keywords)
+                            .group_by(ChatAnswer.keywords)
+                            .having(func.count() >= cross_group_threshold)
+                        ),
+                    )
+                )
+            ).all()
 
-            answer_same_group = await ChatAnswer.filter(
-                context=context,
-                count__gte=answer_count_threshold,
-                group_id=self.data.group_id,
-            )
+            answer_same_group = (
+                await self.session.scalars(
+                    select(ChatAnswer).where(
+                        ChatAnswer.context_id == context.id,
+                        ChatAnswer.count >= answer_count_threshold,
+                        ChatAnswer.group_id == self.data.group_id,
+                    )
+                )
+            ).all()
 
-            candidate_answers: List[Optional[ChatAnswer]] = []
+            candidate_answers: list[ChatAnswer | None] = []
             # 检查候选回复是否在屏蔽列表中
             for answer in set(answers_cross) | set(answer_same_group):
                 if not await self._check_allow(answer):
@@ -303,17 +343,17 @@ class LearningChat:
                 return None
 
             # 从候选回复中进行选择
-            sum_count = sum(answer.count for answer in candidate_answers)
+            sum_count = sum(answer.count for answer in candidate_answers if answer is not None)
             per_list = [
                 answer.count / sum_count * (1 - 1 / answer.count)
-                for answer in candidate_answers
+                for answer in candidate_answers if answer is not None
             ]
 
             per_list.append(1 - sum(per_list))
             answer_dict = tuple(zip(candidate_answers, per_list))
             log_debug(
                 "群聊学习",
-                f'➤➤候选回复有<m>{"|".join([f"""{a.keywords}({round(p, 3)})""" for a, p in answer_dict])}|不回复({round(per_list[-1], 3)})</m>',
+                f'➤➤候选回复有<m>{"|".join([f"""{a.keywords}({round(p, 3)})""" for a, p in answer_dict if a is not None])}|不回复({round(per_list[-1], 3)})</m>',
             )
 
             if (
@@ -328,17 +368,17 @@ class LearningChat:
             await asyncio.sleep(random.random() + 0.5)
             return [result_message]
 
-    async def _ban(self, message_id: Optional[int] = None) -> bool:
+    async def _ban(self, message_id: int | None = None) -> bool:
         """屏蔽消息"""
         bots = get_adapter(Adapter).bots
         if len(bots) == 0:
             return False
-        bot = list(bots.values())[0]
+        bot = next(iter(bots.values()))
         if message_id:
-            if (
-                not (message := await ChatMessage.filter(message_id=message_id).first())
-                or message.message in ALL_WORDS
-            ):
+            message = await self.session.scalar(
+                select(ChatMessage).where(ChatMessage.message_id == message_id).limit(1)
+            )
+            if not message or message.message in ALL_WORDS:
                 return False
             keywords = message.keywords
             try:
@@ -346,9 +386,15 @@ class LearningChat:
             except ActionFailed:
                 log_info("群聊学习", f"待禁用消息<m>{message_id}</m>尝试撤回<r>失败</r>")
         elif (
-            last_reply := await ChatMessage.filter(
-                group_id=self.data.group_id, user_id=self.bot_id
-            ).first()
+            last_reply := await self.session.scalar(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.group_id == self.data.group_id,
+                    ChatMessage.user_id == self.bot_id,
+                )
+                .order_by(ChatMessage.time.desc())
+                .limit(1)
+            )
         ) and (last_reply.message not in ALL_WORDS):
             # 没有指定消息ID，则屏蔽最后一条回复
             keywords = last_reply.keywords
@@ -358,7 +404,9 @@ class LearningChat:
                 log_info("群聊学习", f"待禁用消息<m>{last_reply.message_id}</m>尝试撤回<r>失败</r>")
         else:
             return False
-        if ban_word := await ChatBlackList.filter(keywords=keywords).first():
+        if ban_word := await self.session.scalar(
+            select(ChatBlackList).where(ChatBlackList.keywords == keywords).limit(1)
+        ):
             # 如果已有屏蔽记录
             if self.data.group_id not in ban_word.ban_group_id:
                 # 如果不在屏蔽群列表中，则添加
@@ -367,110 +415,154 @@ class LearningChat:
                 # 如果有超过2个群都屏蔽了该条消息，则全局屏蔽
                 ban_word.global_ban = True
                 log_info("群聊学习", f"学习词<m>{keywords}</m>将被全局禁用")
-                await ChatAnswer.filter(keywords=keywords).delete()
+                await self.session.execute(
+                    delete(ChatAnswer).where(ChatAnswer.keywords == keywords)
+                )
             else:
                 log_info("群聊学习", f"群<m>{self.data.group_id}</m>禁用了学习词<m>{keywords}</m>")
-                await ChatAnswer.filter(
-                    keywords=keywords, group_id=self.data.group_id
-                ).delete()
+                await self.session.execute(
+                    delete(ChatAnswer).where(
+                        ChatAnswer.keywords == keywords,
+                        ChatAnswer.group_id == self.data.group_id,
+                    )
+                )
         else:
             # 没有屏蔽记录，则新建
             log_info("群聊学习", f"群<m>{self.data.group_id}</m>禁用了学习词<m>{keywords}</m>")
             ban_word = ChatBlackList(
                 keywords=keywords, ban_group_id=[self.data.group_id]
             )
-            await ChatAnswer.filter(
-                keywords=keywords, group_id=self.data.group_id
-            ).delete()
-        await ChatContext.filter(keywords=keywords).delete()
-        await ban_word.save()
+            await self.session.execute(
+                delete(ChatAnswer).where(
+                    ChatAnswer.keywords == keywords,
+                    ChatAnswer.group_id == self.data.group_id,
+                )
+            )
+        await self.session.execute(
+            delete(ChatContext).where(ChatContext.keywords == keywords)
+        )
+        self.session.add(ban_word)
+        await self.session.commit()
         return True
 
     @staticmethod
-    async def add_ban(data: Union[ChatMessage, ChatContext, ChatAnswer]):
-        if ban_word := await ChatBlackList.filter(keywords=data.keywords).first():
-            # 如果已有屏蔽记录
-            if isinstance(data, ChatMessage):
-                if data.group_id not in ban_word.ban_group_id:
-                    # 如果不在屏蔽群列表中，则添加
-                    ban_word.ban_group_id.append(data.group_id)
-                if len(ban_word.ban_group_id) >= 2:
-                    # 如果有超过2个群都屏蔽了该条消息，则全局屏蔽
+    async def add_ban(data: ChatMessage | ChatContext | ChatAnswer):
+        async with get_session(expire_on_commit=False) as session:
+            if ban_word := await session.scalar(
+                select(ChatBlackList)
+                .where(ChatBlackList.keywords == data.keywords)
+                .limit(1)
+            ):
+                # 如果已有屏蔽记录
+                if isinstance(data, ChatMessage):
+                    if data.group_id not in ban_word.ban_group_id:
+                        # 如果不在屏蔽群列表中，则添加
+                        ban_word.ban_group_id.append(data.group_id)
+                    if len(ban_word.ban_group_id) >= 2:
+                        # 如果有超过2个群都屏蔽了该条消息，则全局屏蔽
+                        ban_word.global_ban = True
+                        log_info("群聊学习", f"学习词<m>{data.keywords}</m>将被全局禁用")
+                        await session.execute(
+                            delete(ChatAnswer).where(
+                                ChatAnswer.keywords == data.keywords
+                            )
+                        )
+                    else:
+                        log_info(
+                            "群聊学习", f"群<m>{data.group_id}</m>禁用了学习词<m>{data.keywords}</m>"
+                        )
+                        await session.execute(
+                            delete(ChatAnswer).where(
+                                ChatAnswer.keywords == data.keywords,
+                                ChatAnswer.group_id == data.group_id,
+                            )
+                        )
+                else:
                     ban_word.global_ban = True
                     log_info("群聊学习", f"学习词<m>{data.keywords}</m>将被全局禁用")
-                    await ChatAnswer.filter(keywords=data.keywords).delete()
-                else:
-                    log_info(
-                        "群聊学习", f"群<m>{data.group_id}</m>禁用了学习词<m>{data.keywords}</m>"
+                    await session.execute(
+                        delete(ChatAnswer).where(ChatAnswer.keywords == data.keywords)
                     )
-                    await ChatAnswer.filter(
-                        keywords=data.keywords, group_id=data.group_id
-                    ).delete()
             else:
-                ban_word.global_ban = True
-                log_info("群聊学习", f"学习词<m>{data.keywords}</m>将被全局禁用")
-                await ChatAnswer.filter(keywords=data.keywords).delete()
-        else:
-            # 没有屏蔽记录，则新建
-            if isinstance(data, ChatMessage):
-                log_info("群聊学习", f"群<m>{data.group_id}</m>禁用了学习词<m>{data.keywords}</m>")
-                ban_word = ChatBlackList(
-                    keywords=data.keywords, ban_group_id=[data.group_id]
-                )
-                await ChatAnswer.filter(
-                    keywords=data.keywords, group_id=data.group_id
-                ).delete()
-            else:
-                log_info("群聊学习", f"学习词<m>{data.keywords}</m>将被全局禁用")
-                ban_word = ChatBlackList(keywords=data.keywords, global_ban=True)
-                await ChatAnswer.filter(keywords=data.keywords).delete()
-        await ChatContext.filter(keywords=data.keywords).delete()
-        await ban_word.save()
+                # 没有屏蔽记录，则新建
+                if isinstance(data, ChatMessage):
+                    log_info("群聊学习", f"群<m>{data.group_id}</m>禁用了学习词<m>{data.keywords}</m>")
+                    ban_word = ChatBlackList(
+                        keywords=data.keywords, ban_group_id=[data.group_id]
+                    )
+                    await session.execute(
+                        delete(ChatAnswer).where(
+                            ChatAnswer.keywords == data.keywords,
+                            ChatAnswer.group_id == data.group_id,
+                        )
+                    )
+                else:
+                    log_info("群聊学习", f"学习词<m>{data.keywords}</m>将被全局禁用")
+                    ban_word = ChatBlackList(keywords=data.keywords, global_ban=True)
+                    await session.execute(
+                        delete(ChatAnswer).where(ChatAnswer.keywords == data.keywords)
+                    )
+            await session.execute(
+                delete(ChatContext).where(ChatContext.keywords == data.keywords)
+            )
+            session.add(ban_word)
+            await session.commit()
 
     @staticmethod
     async def speak(
         self_id: int,
-    ) -> Optional[Tuple[int, List[Union[str, MessageSegment]]]]:
+    ) -> tuple[int, list[str | MessageSegment]] | None:
         # 主动发言
         cur_time = int(time.time())
-        today_time = time.mktime(datetime.date.today().timetuple())
+        today_time = time.mktime(datetime.datetime.now(tz=datetime.timezone.utc).date().timetuple())
         # 获取两小时内消息超过10条的群列表
-        groups = (
-            await ChatMessage.filter(time__gte=today_time)
-            .annotate(count=Count("id"))
-            .group_by("group_id")
-            .filter(count__gte=10)
-            .values_list("group_id", flat=True)
-        )
+        async with get_session(expire_on_commit=False) as session:
+            groups = (
+                await session.scalars(
+                    select(ChatMessage.group_id)
+                    .where(ChatMessage.time >= today_time)
+                    .group_by(ChatMessage.group_id)
+                    .having(func.count(ChatMessage.id) >= 10)
+                )
+            ).all()
         if not groups:
             return None
         total_messages = {}
         # 获取这些群的两小时内的所有消息
         for group_id in groups:
-            if messages := await ChatMessage.filter(
-                group_id=group_id, time__gte=today_time
-            ):
+            async with get_session(expire_on_commit=False) as session:
+                messages = (
+                    await session.scalars(
+                        select(ChatMessage)
+                        .where(
+                            ChatMessage.group_id == group_id,
+                            ChatMessage.time >= today_time,
+                        )
+                        .order_by(ChatMessage.time.desc())
+                    )
+                ).all()
+            if messages:
                 total_messages[group_id] = messages
         if not total_messages:
             return None
 
         # 根据消息平均间隔来对群进行排序
         def group_popularity_cmp(
-            left_group: Tuple[int, List[ChatMessage]],
-            right_group: Tuple[int, List[ChatMessage]],
+            left_group: tuple[int, list[ChatMessage]],
+            right_group: tuple[int, list[ChatMessage]],
         ):
             def cmp(a, b):
                 return (a > b) - (a < b)
 
-            left_group_id, left_messages = left_group
-            right_group_id, right_messages = right_group
+            _left_group_id, left_messages = left_group
+            _right_group_id, right_messages = right_group
             left_duration = left_messages[0].time - left_messages[-1].time
             right_duration = right_messages[0].time - right_messages[-1].time
             return cmp(
                 len(left_messages) / left_duration, len(right_messages) / right_duration
             )
 
-        popularity: List[Tuple[int, List[ChatMessage]]] = sorted(
+        popularity: list[tuple[int, list[ChatMessage]]] = sorted(
             total_messages.items(), key=cmp_to_key(group_popularity_cmp), reverse=True
         )
         log_debug(
@@ -485,14 +577,6 @@ class LearningChat:
             ban_words = set(
                 chat_config.ban_words
                 + config.ban_words
-                + [
-                    "[CQ:xml",
-                    "[CQ:json",
-                    "[CQ:at",
-                    "[CQ:video",
-                    "[CQ:record",
-                    "[CQ:share",
-                ]
             )
 
             # 是否开启了主动发言
@@ -501,9 +585,17 @@ class LearningChat:
                 continue
 
             # 如果最后一条消息是自己发的，则不主动发言
-            if last_reply := await ChatMessage.filter(
-                group_id=group_id, user_id=self_id
-            ).first():
+            async with get_session(expire_on_commit=False) as session:
+                last_reply = await session.scalar(
+                    select(ChatMessage)
+                    .where(
+                        ChatMessage.group_id == group_id,
+                        ChatMessage.user_id == self_id,
+                    )
+                    .order_by(ChatMessage.time.desc())
+                    .limit(1)
+                )
+            if last_reply:
                 if last_reply.time >= messages[0].time:
                     log_debug(
                         "群聊学习",
@@ -526,23 +618,35 @@ class LearningChat:
                 )
                 continue
 
-            if contexts := await ChatContext.filter(
-                count__gte=config.answer_threshold
-            ).all():
+            async with get_session(expire_on_commit=False) as session:
+                contexts = (
+                    await session.scalars(
+                        select(ChatContext).where(
+                            ChatContext.count >= config.answer_threshold
+                        )
+                    )
+                ).all()
+            if contexts:
                 speak_list = []
                 # context = random.choices(contexts, weights=[context.count for context in contexts])[0]
                 # contexts.sort(key=lambda x: x.count, reverse=True)
-                random.shuffle(contexts)
+                random.shuffle(list(contexts))
                 for context in contexts:
                     if (
                         not speak_list
                         or random.random() < config.speak_continuously_probability
                     ) and len(speak_list) < config.speak_continuously_max_len:
-                        if answers := await ChatAnswer.filter(
-                            context=context,
-                            group_id=group_id,
-                            count__gte=config.answer_threshold,
-                        ):
+                        async with get_session(expire_on_commit=False) as session:
+                            answers = (
+                                await session.scalars(
+                                    select(ChatAnswer).where(
+                                        ChatAnswer.context_id == context.id,
+                                        ChatAnswer.group_id == group_id,
+                                        ChatAnswer.count >= config.answer_threshold,
+                                    )
+                                )
+                            ).all()
+                        if answers:
                             answer = random.choices(
                                 answers,
                                 weights=[
@@ -567,17 +671,29 @@ class LearningChat:
                                 random.random() < config.speak_continuously_probability
                                 and len(speak_list) < config.speak_continuously_max_len
                             ):
-                                if (
-                                    follow_context := await ChatContext.filter(
-                                        keywords=follow_answer.keywords
-                                    ).first()
-                                ) and (
-                                    follow_answers := await ChatAnswer.filter(
-                                        group_id=group_id,
-                                        context=follow_context,
-                                        count__gte=config.answer_threshold,
+                                async with get_session(
+                                    expire_on_commit=False
+                                ) as session:
+                                    follow_context = await session.scalar(
+                                        select(ChatContext)
+                                        .where(
+                                            ChatContext.keywords
+                                            == follow_answer.keywords
+                                        )
+                                        .limit(1)
                                     )
-                                ):
+                                    follow_answers = (
+                                        await session.scalars(
+                                            select(ChatAnswer).where(
+                                                ChatAnswer.group_id == group_id,
+                                                ChatAnswer.context_id
+                                                == follow_context.id,
+                                                ChatAnswer.count
+                                                >= config.answer_threshold,
+                                            )
+                                        )
+                                    ).all() if follow_context else []
+                                if follow_context and follow_answers:
                                     follow_answer = random.choices(
                                         follow_answers,
                                         weights=[
@@ -616,15 +732,23 @@ class LearningChat:
             return None
 
     async def _set_answer(self, message: ChatMessage):
-        if context := await ChatContext.filter(keywords=message.keywords).first():
+        if context := await self.session.scalar(
+            select(ChatContext)
+            .where(ChatContext.keywords == message.keywords)
+            .limit(1)
+        ):
             if context.count < chat_config.learn_max_count:
                 context.count += 1
             context.time = self.data.time
-            if answer := await ChatAnswer.filter(
-                keywords=self.data.keywords,
-                group_id=self.data.group_id,
-                context=context,
-            ).first():
+            if answer := await self.session.scalar(
+                select(ChatAnswer)
+                .where(
+                    ChatAnswer.keywords == self.data.keywords,
+                    ChatAnswer.group_id == self.data.group_id,
+                    ChatAnswer.context_id == context.id,
+                )
+                .limit(1)
+            ):
                 if answer.count < chat_config.learn_max_count:
                     answer.count += 1
                 answer.time = self.data.time
@@ -638,46 +762,40 @@ class LearningChat:
                     context=context,
                     messages=[self.data.message],
                 )
-            await answer.save()
-            await context.save()
+                self.session.add(answer)
+            await self.session.commit()
         else:
-            context = await ChatContext.create(
-                keywords=message.keywords, time=self.data.time
-            )
-            answer = await ChatAnswer.create(
+            context = ChatContext(keywords=message.keywords, time=self.data.time)
+            self.session.add(context)
+            await self.session.flush()
+            answer = ChatAnswer(
                 keywords=self.data.keywords,
                 group_id=self.data.group_id,
                 time=self.data.time,
                 context=context,
                 messages=[self.data.message],
             )
+            self.session.add(answer)
+            await self.session.commit()
         log_debug(
             "群聊学习", f"➤将被学习为<m>{message.message}</m>的回答，已学次数为<m>{answer.count}</m>"
         )
 
-    async def _check_allow(self, message: Union[ChatMessage, ChatAnswer]) -> bool:
+    async def _check_allow(self, message: ChatMessage | ChatAnswer) -> bool:
         raw_message = (
             message.message if isinstance(message, ChatMessage) else message.messages[0]
         )
         # if len(raw_message) < 2:
         #     return False
-        if any(
-            i in raw_message
-            for i in {
-                "[CQ:xml",
-                "[CQ:json",
-                "[CQ:at",
-                "[CQ:video",
-                "[CQ:record",
-                "[CQ:share",
-            }
-        ):
-            return False
         if any(i in raw_message for i in self.ban_words):
             return False
         if raw_message.startswith("&#91;") and raw_message.endswith("&#93;"):
             return False
-        if ban_word := await ChatBlackList.filter(keywords=message.keywords).first():
+        if ban_word := await self.session.scalar(
+            select(ChatBlackList)
+            .where(ChatBlackList.keywords == message.keywords)
+            .limit(1)
+        ):
             if ban_word.global_ban or message.group_id in ban_word.ban_group_id:
                 return False
         return True

@@ -1,28 +1,30 @@
 from nonebot import require
 
-require("nonebot_plugin_tortoise_orm")
-
-
-import asyncio
+require("nonebot_plugin_orm")
 import random
 import time
+from asyncio import sleep
 
-from nonebot import on_message, require, logger, get_adapter
-from nonebot.adapters.onebot.v11 import (
-    GroupMessageEvent,
-    GROUP,
-    Message,
-    ActionFailed,
+from nonebot import get_adapter, logger, on_message, require
+from nonebot.adapters.milky import (
     Adapter,
+    Message,
 )
+from nonebot.adapters.milky.event import GroupMessageEvent
+from nonebot.adapters.milky.exception import ActionFailed
+from nonebot.adapters.milky.permission import GROUP
+from nonebot.matcher import Matcher
 from nonebot.params import Arg
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 from nonebot.typing import T_State
+from nonebot_plugin_orm import get_session
+
+from . import web_api as web_api
+from . import web_page as web_page
+from .config import NICKNAME, config_manager
 from .handler import LearningChat
 from .models import ChatMessage
-from .config import config_manager, NICKNAME
-from . import web_api, web_page
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -33,7 +35,7 @@ __plugin_meta__ = PluginMetadata(
     usage="详见README",
     type="application",
     homepage="https://github.com/CMHopeSunshine/nonebot-plugin-learning-chat",
-    supported_adapters={"~onebot.v11"},
+    supported_adapters={"~milky"},
     extra={"author": "惜月"},
 )
 
@@ -44,11 +46,13 @@ async def ChatRule(event: GroupMessageEvent, state: T_State) -> bool:
         return True
     return False
 
+async def NotMe(event: GroupMessageEvent) -> bool:
+    return event.data.sender_id != event.self_id
 
 learning_chat = on_message(
     priority=99,
     block=False,
-    rule=Rule(ChatRule),
+    rule=Rule(NotMe) & Rule(ChatRule),
     permission=GROUP,
     state={
         "pm_name": "群聊学习",
@@ -60,28 +64,33 @@ learning_chat = on_message(
 
 
 @learning_chat.handle()
-async def _(event: GroupMessageEvent, answers=Arg("answers")):
+async def _(matcher: Matcher, event: GroupMessageEvent, answers=Arg("answers")):
     for answer in answers:
         try:
             logger.info(
-                "群聊学习", f'{NICKNAME}将向群<m>{event.group_id}</m>回复<m>"{answer}"</m>'
+                "群聊学习", f'{NICKNAME}将向群<m>{event.data.peer_id}</m>回复<m>"{answer}"</m>'
             )
-            msg = await learning_chat.send(Message(answer))
-            await ChatMessage.create(
-                group_id=event.group_id,
-                user_id=event.self_id,
-                message_id=msg["message_id"],
-                message=answer,
-                raw_message=answer,
-                time=int(time.time()),
-                plain_text=Message(answer).extract_plain_text(),
-            )
-            await asyncio.sleep(random.random() + 0.5)
+            msg = await matcher.send(Message(answer))
+            async with get_session(expire_on_commit=False) as session:
+                session.add(
+                    ChatMessage(
+                        group_id=event.data.peer_id,
+                        user_id=event.data.sender_id,
+                        message_id=msg.message_seq,
+                        message=answer,
+                        raw_message=answer,
+                        time=int(time.time()),
+                        plain_text=Message(answer).extract_plain_text(),
+                    )
+                )
+                await session.commit()
+            await sleep(random.random() + 0.5)
         except ActionFailed:
             logger.info(
                 "群聊学习",
-                f'{NICKNAME}向群<m>{event.group_id}</m>的回复<m>"{answer}"</m>发送<r>失败，可能处于风控中</r>',
+                f'{NICKNAME}向群<m>{event.data.peer_id}</m>的回复<m>"{answer}"</m>发送<r>失败，可能处于风控中</r>',
             )
+    await matcher.finish()
 
 
 @scheduler.scheduled_job("interval", minutes=3, misfire_grace_time=5)
@@ -92,7 +101,7 @@ async def speak_up():
         bots = get_adapter(Adapter).bots
         if len(bots) == 0:
             return
-        bot = list(bots.values())[0]
+        bot = next(iter(bots.values()))
     except ValueError:
         return
     if not (speak := await LearningChat.speak(int(bot.self_id))):
@@ -104,16 +113,20 @@ async def speak_up():
             send_result = await bot.send_group_msg(
                 group_id=group_id, message=Message(msg)
             )
-            await ChatMessage.create(
-                group_id=group_id,
-                user_id=int(bot.self_id),
-                message_id=send_result["message_id"],
-                message=msg,
-                raw_message=msg,
-                time=int(time.time()),
-                plain_text=Message(msg).extract_plain_text(),
-            )
-            await asyncio.sleep(random.randint(2, 4))
+            async with get_session(expire_on_commit=False) as session:
+                session.add(
+                    ChatMessage(
+                        group_id=group_id,
+                        user_id=int(bot.self_id),
+                        message_id=send_result.message_seq,
+                        message=msg,
+                        raw_message=msg,
+                        time=int(time.time()),
+                        plain_text=Message(msg).extract_plain_text(),
+                    )
+                )
+                await session.commit()
+            await sleep(random.randint(2, 4))
         except ActionFailed:
             logger.info(
                 "群聊学习",

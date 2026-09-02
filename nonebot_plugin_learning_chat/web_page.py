@@ -1,733 +1,1054 @@
-from amis import ColumnList, AmisList, ActionType, TableCRUD, TableColumn
-from amis import Dialog, PageSchema, Switch, InputNumber, InputTag, Action, App
-from amis import (
-    Form,
-    InputText,
-    InputPassword,
-    DisplayModeEnum,
-    Horizontal,
-    Remark,
-    Html,
-    Page,
-    AmisAPI,
-    Wrapper,
-)
-from amis import LevelEnum, Select, InputArray, Alert, Tpl, Flex
+import datetime
+import inspect
+from collections.abc import Awaitable, Callable
+from functools import partial
+from typing import Any
 
-from .config import NICKNAME
+from nicegui import app, ui
+from nonebot import get_adapter
+from nonebot.adapters.milky import Adapter
+from nonebot_plugin_orm import get_session
+from sqlalchemy import delete, false, func, select, update
 
-logo = Html(
-    html="""
-<p align="center">
-    <a href="https://github.com/CMHopeSunshine/nonebot-plugin-learning-chat/">
-        <img src="http://static.cherishmoon.fun/LittlePaimon/readme/logo.png"
-         width="256" height="256" alt="Learning-Chat">
-    </a>
-</p>
-<h1 align="center">Nonebot-Plugin-Learning-Chat 控制台</h1>
-<div align="center">
-    <a href="https://github.com/CMHopeSunshine/nonebot-plugin-learning-chat/" target="_blank">
-    Github仓库</a>
-</div>
-<br>
-<br>
-"""
-)
-login_api = AmisAPI(
-    url="/learning_chat/api/login",
-    method="post",
-    adaptor="""
-        if (payload.status == 0) {
-            localStorage.setItem("token", payload.data.token);
-        }
-        return payload;
-    """,
-)
+try:
+    import jieba_fast as jieba  # type: ignore
+except ImportError:
+    import jieba
 
-login_form = Form(
-    api=login_api,
-    title="",
-    body=[
-        InputText(
-            name="username",
-            label="用户名",
-            labelRemark=Remark(shape="circle", content="后台管理用户名，默认为chat"),
-        ),
-        InputPassword(
-            name="password",
-            label="密码",
-            labelRemark=Remark(shape="circle", content="后台管理密码，默认为admin"),
-        ),
-    ],
-    mode=DisplayModeEnum.horizontal,
-    horizontal=Horizontal(left=3, right=9, offset=5),
-    redirect="/learning_chat/admin",
-)
-body = Wrapper(className="w-2/5 mx-auto my-0 m:w-full", body=login_form)
-login_page = Page(title="", body=[logo, body])
+from .config import NICKNAME, config_manager
+from .handler import LearningChat
+from .models import ChatAnswer, ChatBlackList, ChatContext, ChatMessage
 
-global_config_form = Form(
-    title="全局配置",
-    name="global_config",
-    initApi="/learning_chat/api/chat_global_config",
-    api="post:/learning_chat/api/chat_global_config",
-    interval=None,
-    body=[
-        Switch(
-            label="群聊学习总开关",
-            name="total_enable",
-            value="${total_enable}",
-            onText="开启",
-            offText="关闭",
-            labelRemark=Remark(
-                shape="circle", content="关闭后，全局都将不会再学习和回复(但是仍会对收到的消息进行记录)。"
-            ),
-        ),
-        Switch(
-            label="后台管理总开关",
-            name="enable_web",
-            value="${enable_web}",
-            onText="开启",
-            offText="关闭",
-            labelRemark=Remark(shape="circle", content="是否开启本后台管理，若关闭，则无法再访问本页面。"),
-        ),
-        InputText(
-            label="后台管理用户名",
-            name="web_username",
-            value="${web_username}",
-            labelRemark=Remark(shape="circle", content="登录本后台管理所需要的用户名。"),
-        ),
-        InputPassword(
-            label="后台管理密码",
-            name="web_password",
-            value="${web_password}",
-            labelRemark=Remark(shape="circle", content="登录本后台管理所需要的密码。"),
-        ),
-        InputText(
-            label="后台管理token密钥",
-            name="web_secret_key",
-            value="${web_secret_key}",
-            labelRemark=Remark(shape="circle", content="用于本后台管理加密验证token的密钥。"),
-        ),
-        InputNumber(
-            label="单句关键词数量",
-            name="KEYWORDS_SIZE",
-            value="${KEYWORDS_SIZE}",
-            visibleOn="${total_enable}",
-            min=2,
-            labelRemark=Remark(
-                shape="circle", content="单句语句标签数量，影响对一句话的主题词提取效果，建议保持默认为3。"
-            ),
-        ),
-        InputNumber(
-            label="跨群回复阈值",
-            name="cross_group_threshold",
-            value="${cross_group_threshold}",
-            visibleOn="${total_enable}",
-            min=1,
-            labelRemark=Remark(
-                shape="circle", content="当学习到的一种回复在N个群都有，那么这个回复就会变为全局回复。"
-            ),
-        ),
-        InputNumber(
-            label="最高学习次数",
-            name="learn_max_count",
-            value="${learn_max_count}",
-            visibleOn="${total_enable}",
-            min=2,
-            labelRemark=Remark(
-                shape="circle",
-                content="学习的回复最高能累计到的次数，值越高，这个回复就会学习得越深，越容易进行回复，如果不想每次都大概率固定回复某一句话，可以将该值设低点。",
-            ),
-        ),
-        InputTag(
-            label="全局屏蔽词",
-            name="ban_words",
-            value="${ban_words}",
-            enableBatchAdd=True,
-            placeholder="添加全局屏蔽词",
-            visibleOn="${total_enable}",
-            joinValues=False,
-            extractValue=True,
-            labelRemark=Remark(
-                shape="circle",
-                content="全局屏蔽词，含有这些词的消息不会学习和回复，默认已屏蔽at、分享、语音、和视频等消息。(回车进行添加)",
-            ),
-        ),
-        InputTag(
-            label="全局屏蔽用户",
-            name="ban_users",
-            value="${ban_users}",
-            enableBatchAdd=True,
-            placeholder="添加全局屏蔽用户",
-            visibleOn="${total_enable}",
-            joinValues=False,
-            extractValue=True,
-            labelRemark=Remark(
-                shape="circle", content="全局屏蔽用户，和这些用户有关的消息不会学习和回复。(回车进行添加)"
-            ),
-        ),
-        InputTag(
-            label="自定义词典",
-            name="dictionary",
-            value="${dictionary}",
-            enableBatchAdd=True,
-            placeholder="添加自定义词语",
-            visibleOn="${total_enable}",
-            joinValues=False,
-            extractValue=True,
-            labelRemark=Remark(
-                shape="circle",
-                content="添加自定义词语，让分词能够识别未收录的词汇，提高学习的准确性。你可以添加特殊名词，这样学习时就会将该词看作一个整体，目前词典中已默认添加部分原神相关词汇。(回车进行添加)",
-            ),
-        ),
-    ],
-    actions=[
-        Action(label="保存", level=LevelEnum.success, type="submit"),
-        Action(label="重置", level=LevelEnum.warning, type="reset"),
-    ],
-)
-group_select = Select(
-    label="分群配置", name="group_id", source="${group_list}", placeholder="选择群"
-)
-group_config_form = Form(
-    title="分群配置",
-    visibleOn="group_id != null",
-    initApi="/learning_chat/api/chat_group_config?group_id=${group_id}",
-    api="post:/learning_chat/api/chat_group_config?group_id=${group_id}",
-    interval=None,
-    body=[
-        Switch(
-            label="群聊学习开关",
-            name="enable",
-            value="${enable}",
-            onText="开启",
-            offText="关闭",
-            labelRemark=Remark(shape="circle", content="针对该群的群聊学习开关，关闭后，仅该群不会学习和回复。"),
-        ),
-        InputNumber(
-            label="回复阈值",
-            name="answer_threshold",
-            value="${answer_threshold}",
-            visibleOn="${enable}",
-            min=2,
-            labelRemark=Remark(shape="circle", content="可以理解为学习成功所需要的次数，值越低学得越快。"),
-        ),
-        InputArray(
-            label="回复阈值权重",
-            name="answer_threshold_weights",
-            value="${answer_threshold_weights}",
-            items=InputNumber(min=1, max=100, value=25, suffix="%"),
-            inline=True,
-            visibleOn="${enable}",
-            labelRemark=Remark(
-                shape="circle",
-                content="影响回复阈值的计算方式，以默认的回复阈值4、权重[10, 30, 60]为例，在计算阈值时，60%概率为4，30%概率为3，10%概率为2。",
-            ),
-        ),
-        InputNumber(
-            label="复读阈值",
-            name="repeat_threshold",
-            value="${repeat_threshold}",
-            visibleOn="${enable}",
-            min=2,
-            labelRemark=Remark(
-                shape="circle", content=f"跟随复读所需要的阈值，有N个人复读后，{NICKNAME}就会跟着复读。"
-            ),
-        ),
-        InputNumber(
-            label="打断复读概率",
-            name="break_probability",
-            value="${break_probability}",
-            min=0,
-            max=100,
-            suffix="%",
-            visibleOn="${AND(enable, speak_enable)}",
-            labelRemark=Remark(shape="circle", content="达到复读阈值时，打断复读而不是跟随复读的概率。"),
-        ),
-        InputTag(
-            label="屏蔽词",
-            name="ban_words",
-            value="${ban_words}",
-            enableBatchAdd=True,
-            placeholder="添加屏蔽词",
-            visibleOn="${enable}",
-            joinValues=False,
-            extractValue=True,
-            labelRemark=Remark(shape="circle", content="含有这些词的消息不会学习和回复。(回车进行添加)"),
-        ),
-        InputTag(
-            label="屏蔽用户",
-            source="${member_list}",
-            name="ban_users",
-            value="${ban_users}",
-            enableBatchAdd=True,
-            placeholder="添加屏蔽用户",
-            visibleOn="${enable}",
-            joinValues=False,
-            extractValue=True,
-            labelRemark=Remark(shape="circle", content="和该群中这些用户有关的消息不会学习和回复。(回车进行添加)"),
-        ),
-        Switch(
-            label="主动发言开关",
-            name="speak_enable",
-            value="${speak_enable}",
-            visibleOn="${enable}",
-            labelRemark=Remark(
-                shape="circle",
-                content=f"是否允许{NICKNAME}在该群主动发言，主动发言是指每隔一段时间挑选一个热度较高的群，主动发一些学习过的内容。",
-            ),
-        ),
-        InputNumber(
-            label="主动发言阈值",
-            name="speak_threshold",
-            value="${speak_threshold}",
-            visibleOn="${AND(enable, speak_enable)}",
-            min=0,
-            labelRemark=Remark(shape="circle", content="值越低，主动发言的可能性越高。"),
-        ),
-        InputNumber(
-            label="主动发言最小间隔",
-            name="speak_min_interval",
-            value="${speak_min_interval}",
-            min=0,
-            visibleOn="${AND(enable, speak_enable)}",
-            suffix="秒",
-            labelRemark=Remark(shape="circle", content="进行主动发言的最小时间间隔。"),
-        ),
-        InputNumber(
-            label="连续主动发言概率",
-            name="speak_continuously_probability",
-            value="${speak_continuously_probability}",
-            min=0,
-            max=100,
-            suffix="%",
-            visibleOn="${AND(enable, speak_enable)}",
-            labelRemark=Remark(shape="circle", content="触发主动发言时，连续进行发言的概率。"),
-        ),
-        InputNumber(
-            label="最大连续主动发言句数",
-            name="speak_continuously_max_len",
-            value="${speak_continuously_max_len}",
-            visibleOn="${AND(enable, speak_enable)}",
-            min=1,
-            labelRemark=Remark(shape="circle", content="连续主动发言的最大句数。"),
-        ),
-        InputNumber(
-            label="主动发言附带戳一戳概率",
-            name="speak_poke_probability",
-            value="${speak_poke_probability}",
-            min=0,
-            max=100,
-            suffix="%",
-            visibleOn="${AND(enable, speak_enable)}",
-            labelRemark=Remark(
-                shape="circle", content="主动发言时附带戳一戳的概率，会在最近5个发言者中随机选一个戳。"
-            ),
-        ),
-    ],
-    actions=[
-        Action(label="保存", level=LevelEnum.success, type="submit"),
-        ActionType.Ajax(
-            label="保存至所有群",
-            level=LevelEnum.primary,
-            confirmText="确认将当前配置保存至所有群？",
-            api="post:/learning_chat/api/chat_group_config?group_id=all",
-        ),
-        Action(label="重置", level=LevelEnum.warning, type="reset"),
-    ],
-)
+PER_PAGE = 10
 
-blacklist_table = TableCRUD(
-    mode="table",
-    title="",
-    syncLocation=False,
-    api="/learning_chat/api/get_chat_blacklist",
-    interval=15000,
-    headerToolbar=[
-        ActionType.Ajax(
-            label="取消所有禁用",
-            level=LevelEnum.warning,
-            confirmText="确定要取消所有禁用吗？",
-            api="put:/learning_chat/api/delete_all?type=blacklist",
-        )
-    ],
-    itemActions=[
-        ActionType.Ajax(
-            tooltip="取消禁用",
-            icon="fa fa-check-circle-o text-info",
-            confirmText="取消该被禁用的内容/关键词，但是仍然需要重新学习哦！",
-            api="delete:/learning_chat/api/delete_chat?type=blacklist&id=${id}",
-        )
-    ],
-    footable=True,
-    columns=[
-        TableColumn(
-            type="tpl",
-            tpl="${keywords|truncate:20}",
-            label="内容/关键词",
-            name="keywords",
-            searchable=True,
-            popOver={
-                "mode": "dialog",
-                "title": "全文",
-                "className": "break-all",
-                "body": {"type": "tpl", "tpl": "${keywords}"},
-            },
-        ),
-        TableColumn(label="已禁用的群", name="bans", searchable=True),
-    ],
-)
-message_table = TableCRUD(
-    mode="table",
-    title="",
-    syncLocation=False,
-    api="/learning_chat/api/get_chat_messages",
-    interval=12000,
-    headerToolbar=[
-        ActionType.Ajax(
-            label="删除所有聊天记录",
-            level=LevelEnum.warning,
-            confirmText="确定要删除所有聊天记录吗？",
-            api="put:/learning_chat/api/delete_all?type=message",
-        )
-    ],
-    itemActions=[
-        ActionType.Ajax(
-            tooltip="禁用",
-            icon="fa fa-ban text-danger",
-            confirmText="禁用该聊天记录相关的学习内容和回复",
-            api="put:/learning_chat/api/ban_chat?type=message&id=${id}",
-        ),
-        ActionType.Ajax(
-            tooltip="删除",
-            icon="fa fa-times text-danger",
-            confirmText="删除该条聊天记录",
-            api="delete:/learning_chat/api/delete_chat?type=message&id=${id}",
-        ),
-    ],
-    footable=True,
-    columns=[
-        TableColumn(label="消息ID", name="message_id"),
-        TableColumn(label="群ID", name="group_id", searchable=True),
-        TableColumn(label="用户ID", name="user_id", searchable=True),
-        TableColumn(
-            type="tpl",
-            tpl="${raw_message|truncate:20}",
-            label="消息",
-            name="message",
-            searchable=True,
-            popOver={
-                "mode": "dialog",
-                "title": "消息全文",
-                "className": "break-all",
-                "body": {"type": "tpl", "tpl": "${raw_message}"},
-            },
-        ),
-        TableColumn(
-            type="tpl",
-            tpl="${time|date:YYYY-MM-DD HH\\:mm\\:ss}",
-            label="时间",
-            name="time",
-            sortable=True,
-        ),
-    ],
-)
-answer_table = TableCRUD(
-    mode="table",
-    syncLocation=False,
-    footable=True,
-    api="/learning_chat/api/get_chat_answers",
-    interval=12000,
-    headerToolbar=[
-        ActionType.Ajax(
-            label="删除所有已学习的回复",
-            level=LevelEnum.warning,
-            confirmText="确定要删除所有已学习的回复吗？",
-            api="put:/learning_chat/api/delete_all?type=answer",
-        )
-    ],
-    itemActions=[
-        ActionType.Ajax(
-            tooltip="禁用",
-            icon="fa fa-ban text-danger",
-            confirmText="禁用并删除该已学回复",
-            api="put:/learning_chat/api/ban_chat?type=answer&id=${id}",
-        ),
-        ActionType.Ajax(
-            tooltip="删除",
-            icon="fa fa-times text-danger",
-            confirmText="仅删除该已学回复，不会禁用，所以依然能继续学",
-            api="delete:/learning_chat/api/delete_chat?type=answer&id=${id}",
-        ),
-    ],
-    columns=[
-        TableColumn(label="ID", name="id", visible=False),
-        TableColumn(label="群ID", name="group_id", searchable=True),
-        TableColumn(
-            type="tpl",
-            tpl="${keywords|truncate:20}",
-            label="内容/关键词",
-            name="keywords",
-            searchable=True,
-            popOver={
-                "mode": "dialog",
-                "title": "内容全文",
-                "className": "break-all",
-                "body": {"type": "tpl", "tpl": "${keywords}"},
-            },
-        ),
-        TableColumn(
-            type="tpl",
-            tpl="${time|date:YYYY-MM-DD HH\\:mm\\:ss}",
-            label="最后学习时间",
-            name="time",
-            sortable=True,
-        ),
-        TableColumn(label="次数", name="count", sortable=True),
-        ColumnList(
-            label="完整消息",
-            name="messages",
-            breakpoint="*",
-            source="${messages}",
-            listItem=AmisList.Item(body=[AmisList.Item.ListBodyField(name="msg")]),
-        ),
-    ],
-)
-answer_table_on_context = TableCRUD(
-    mode="table",
-    syncLocation=False,
-    footable=True,
-    api="/learning_chat/api/get_chat_answers?context_id=${id}&page=${page}&perPage=${perPage}&orderBy=${orderBy}&orderDir=${orderDir}",
-    interval=12000,
-    headerToolbar=[
-        ActionType.Ajax(
-            label="删除该内容所有回复",
-            level=LevelEnum.warning,
-            confirmText="确定要删除该条内容已学习的回复吗？",
-            api="put:/learning_chat/api/delete_all?type=answer&id=${id}",
-        )
-    ],
-    itemActions=[
-        ActionType.Ajax(
-            tooltip="禁用",
-            icon="fa fa-ban text-danger",
-            confirmText="禁用并删除该已学回复",
-            api="put:/learning_chat/api/ban_chat?type=answer&id=${id}",
-        ),
-        ActionType.Ajax(
-            tooltip="删除",
-            icon="fa fa-times text-danger",
-            confirmText="仅删除该已学回复，但不禁用，依然能继续学",
-            api="delete:/learning_chat/api/delete_chat?type=answer&id=${id}",
-        ),
-    ],
-    columns=[
-        TableColumn(label="ID", name="id", visible=False),
-        TableColumn(label="群ID", name="group_id"),
-        TableColumn(
-            type="tpl",
-            tpl="${keywords|truncate:20}",
-            label="内容/关键词",
-            name="keywords",
-            searchable=True,
-            popOver={
-                "mode": "dialog",
-                "title": "内容全文",
-                "className": "break-all",
-                "body": {"type": "tpl", "tpl": "${keywords}"},
-            },
-        ),
-        TableColumn(
-            type="tpl",
-            tpl="${time|date:YYYY-MM-DD HH\\:mm\\:ss}",
-            label="最后学习时间",
-            name="time",
-            sortable=True,
-        ),
-        TableColumn(label="次数", name="count", sortable=True),
-        ColumnList(
-            label="完整消息",
-            name="messages",
-            breakpoint="*",
-            source="${messages}",
-            listItem=AmisList.Item(body=[AmisList.Item.ListBodyField(name="msg")]),
-        ),
-    ],
-)
-context_table = TableCRUD(
-    mode="table",
-    title="",
-    syncLocation=False,
-    api="/learning_chat/api/get_chat_contexts",
-    interval=12000,
-    headerToolbar=[
-        ActionType.Ajax(
-            label="删除所有学习内容",
-            level=LevelEnum.warning,
-            confirmText="确定要删除所有已学习的内容吗？",
-            api="put:/learning_chat/api/delete_all?type=context",
-        )
-    ],
-    itemActions=[
-        ActionType.Dialog(
-            tooltip="回复列表",
-            icon="fa fa-book text-info",
-            dialog=Dialog(title="回复列表", size="lg", body=answer_table_on_context),
-        ),
-        ActionType.Ajax(
-            tooltip="禁用",
-            icon="fa fa-ban text-danger",
-            confirmText="禁用并删除该学习的内容及其所有回复",
-            api="put:/learning_chat/api/ban_chat?type=context&id=${id}",
-        ),
-        ActionType.Ajax(
-            tooltip="删除",
-            icon="fa fa-times text-danger",
-            confirmText="仅删除该学习的内容及其所有回复，但不禁用，依然能继续学",
-            api="delete:/learning_chat/api/delete_chat?type=context&id=${id}",
-        ),
-    ],
-    footable=True,
-    columns=[
-        TableColumn(label="ID", name="id", visible=False),
-        TableColumn(
-            type="tpl",
-            tpl="${keywords|truncate:20}",
-            label="内容/关键词",
-            name="keywords",
-            searchable=True,
-            popOver={
-                "mode": "dialog",
-                "title": "内容全文",
-                "className": "break-all",
-                "body": {"type": "tpl", "tpl": "${keywords}"},
-            },
-        ),
-        TableColumn(
-            type="tpl",
-            tpl="${time|date:YYYY-MM-DD HH\\:mm\\:ss}",
-            label="最后学习时间",
-            name="time",
-            sortable=True,
-        ),
-        TableColumn(label="已学次数", name="count", sortable=True),
-    ],
-)
 
-message_page = PageSchema(
-    url="/messages",
-    icon="fa fa-comments",
-    label="群聊消息",
-    schema=Page(
-        title="群聊消息",
-        body=[
-            Alert(
-                level=LevelEnum.info,
-                className="white-space-pre-wrap",
-                body=(
-                    f"此数据库记录了{NICKNAME}收到的聊天记录。\n"
-                    '· 点击"禁用"可以将某条聊天记录进行禁用，这样其相关的学习就会列入禁用列表。\n'
-                    '· 点击"删除"可以删除某条记录，但不会影响它的学习。\n'
-                    f"· 可以通过搜索{NICKNAME}的QQ号，来查看它的回复记录。"
+# ---------------------------------------------------------------------------
+# auth helpers
+# ---------------------------------------------------------------------------
+def is_authenticated() -> bool:
+    """Return whether the current browser session has already logged in."""
+    return bool(app.storage.user.get("authenticated"))
+
+
+def logout() -> None:
+    app.storage.user.clear()
+    ui.navigate.to("/login")
+
+
+# ---------------------------------------------------------------------------
+# generic helpers
+# ---------------------------------------------------------------------------
+def confirm(title: str, message: str, on_confirm: Callable[[], Any]) -> None:
+    """Show a confirmation dialog and run ``on_confirm`` after the user agrees."""
+    with ui.dialog() as dialog, ui.card().classes("p-4"):
+        ui.label(title).classes("text-lg font-bold")
+        ui.label(message)
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("取消", on_click=dialog.close)
+
+            async def do_confirm() -> None:
+                dialog.close()
+                result = on_confirm()
+                if inspect.isawaitable(result):
+                    await result
+
+            ui.button("确定", on_click=do_confirm).props("color=positive")
+    dialog.open()
+
+
+def format_time(ts: int) -> str:
+    return datetime.datetime.fromtimestamp(ts, tz = datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _int(value: float | None, default: int) -> int:
+    """Coerce a numeric input value to ``int``, falling back to ``default``."""
+    return default if value is None else int(value)
+
+
+def _float(value: float | None, default: float) -> float:
+    """Coerce a numeric input value to ``float``, falling back to ``default``."""
+    return default if value is None else float(value)
+
+
+def _int_list(values: list[str]) -> list[int]:
+    """Coerce a list of string chips to ``int``, dropping non-numeric entries."""
+    result: list[int] = []
+    for value in values:
+        try:
+            result.append(int(value))
+        except ValueError:
+            continue
+    return result
+
+
+def _int_condition(column: Any, value: str | None) -> Any:
+    """Exact-match condition for an integer column.
+
+    Unparseable input yields a never-true condition so invalid searches
+    return no rows instead of everything.
+    """
+    return column == int(value) if value and value.isdigit() else false()
+
+
+async def build_data_table(
+    *,
+    columns: list[dict],
+    fetch: Callable[[dict, int], Awaitable[tuple[list[dict], int]]],
+    search_fields: list[tuple[str, str, str]] | None = None,
+    toolbar_buttons: list[tuple[str, str, Callable[[], Any]]] | None = None,
+    row_buttons: list[tuple[str, str, Callable[[dict], Any]]] | None = None,
+    row_key: str = "id",
+) -> None:
+    """Build a paginated, searchable table with single-row selection.
+
+    ``fetch(filters, page)`` returns ``(rows, total)``; the filters dict is
+    built from the search fields (field name -> input value). Row/toolbar
+    button callbacks may be sync or async and receive the selected row (or no
+    argument for toolbar buttons).
+    """
+    state = {"page": 1, "total_pages": 1, "table": None}
+    search_inputs: dict[str, ui.input] = {}
+
+    with ui.column().classes("w-full gap-2"):
+        with ui.row().classes("w-full items-center gap-2 flex-wrap"):
+            for key, label, placeholder in (search_fields or []):
+                search_inputs[key] = ui.input(label, placeholder=placeholder)
+
+            def do_search() -> None:
+                state["page"] = 1
+                content.refresh()
+
+            ui.button("搜索", icon="search", on_click=do_search)
+
+            for label, icon, callback in (toolbar_buttons or []):
+                ui.button(label, icon=icon, on_click=callback).props("color=negative")
+
+        @ui.refreshable
+        async def content() -> None:
+            filters = {k: inp.value for k, inp in search_inputs.items() if inp.value}
+            rows, total = await fetch(filters, state["page"])
+            state["total_pages"] = max((total + PER_PAGE - 1) // PER_PAGE, 1)
+            if state["page"] > state["total_pages"]:
+                state["page"] = max(state["total_pages"], 1)
+                rows, total = await fetch(filters, state["page"])
+            state["table"] = ui.table(
+                columns=columns,
+                rows=rows,
+                row_key=row_key,
+                selection="single",
+            )
+            count_label.text = f"共 {total} 条"
+            page_label.text = f"{state['page']} / {state['total_pages']}"
+
+        def goto(page: int) -> None:
+            state["page"] = min(max(page, 1), state["total_pages"])
+            content.refresh()
+
+        async def require_row(callback: Callable[[dict], Any]) -> None:
+            table = state["table"]
+            if not table or not table.selected:
+                ui.notify("请先选择一行", type="warning")
+                return
+            result = callback(table.selected[0])
+            if inspect.isawaitable(result):
+                await result
+
+        with ui.row().classes("w-full items-center justify-between"):
+            count_label = ui.label("")
+            with ui.row().classes("items-center gap-1"):
+                ui.button(
+                    icon="chevron_left",
+                    on_click=lambda: goto(state["page"] - 1),
+                ).props("flat dense")
+                page_label = ui.label("")
+                ui.button(
+                    icon="chevron_right",
+                    on_click=lambda: goto(state["page"] + 1),
+                ).props("flat dense")
+
+        if row_buttons:
+            with ui.row().classes("w-full items-center gap-2 flex-wrap"):
+                for label, icon, callback in row_buttons:
+                    ui.button(
+                        label,
+                        icon=icon,
+                        on_click=partial(require_row, callback),
+                    ).props("outline dense")
+
+        await content()
+
+
+# ---------------------------------------------------------------------------
+# pages
+# ---------------------------------------------------------------------------
+@ui.page("/")
+def index() -> None:
+    ui.navigate.to("/login")
+
+
+@ui.page("/login")
+def login_page() -> None:
+    if is_authenticated():
+        ui.navigate.to("/admin")
+        return
+    with ui.column().classes("absolute-center w-96 max-w-full"):
+        with ui.card().classes("w-full p-6"):
+            ui.label("Learning-Chat 后台管理").classes(
+                "text-2xl font-bold text-center mb-2"
+            )
+            ui.label("Nonebot-Plugin-Learning-Chat 控制台").classes(
+                "text-sm text-gray-500 text-center mb-4"
+            )
+            username = ui.input("用户名", placeholder="后台管理用户名，默认为 chat")
+            password = ui.input("密码", password=True, placeholder="后台管理密码，默认为 admin")
+
+            def do_login() -> None:
+                cfg = config_manager.config
+                if (
+                    username.value == cfg.web_username
+                    and password.value == cfg.web_password
+                ):
+                    app.storage.user["authenticated"] = True
+                    ui.navigate.to("/admin")
+                else:
+                    ui.notify("登录失败，请确认用户名和密码无误", type="negative")
+
+            ui.button("登录", icon="login", on_click=do_login).props(
+                "color=primary"
+            ).classes("w-full")
+def build_configs() -> None:
+    """Global config form and per-group config form."""
+    with ui.card().classes("w-full p-4"):
+        ui.label("全局配置").classes("text-lg font-bold")
+        with ui.column().classes("w-full gap-3"):
+            total_enable = ui.switch(
+                "群聊学习总开关", value=config_manager.config.total_enable
+            )
+            enable_web = ui.switch(
+                "后台管理总开关", value=config_manager.config.enable_web
+            )
+            web_username = ui.input(
+                "后台管理用户名", value=config_manager.config.web_username
+            )
+            web_password = ui.input(
+                "后台管理密码",
+                value=config_manager.config.web_password,
+                password=True,
+            )
+            web_secret_key = ui.input(
+                "后台管理 token 密钥", value=config_manager.config.web_secret_key
+            )
+            keywords_size = ui.number(
+                "单句关键词数量",
+                value=config_manager.config.KEYWORDS_SIZE,
+                min=2,
+                precision=0,
+            )
+            cross_group_threshold = ui.number(
+                "跨群回复阈值",
+                value=config_manager.config.cross_group_threshold,
+                min=1,
+                precision=0,
+            )
+            learn_max_count = ui.number(
+                "最高学习次数",
+                value=config_manager.config.learn_max_count,
+                min=2,
+                precision=0,
+            )
+            ban_words = ui.input_chips(
+                "全局屏蔽词", value=config_manager.config.ban_words
+            )
+            ban_users = ui.input_chips(
+                "全局屏蔽用户",
+                value=[str(u) for u in config_manager.config.ban_users],
+            )
+            dictionary = ui.input_chips(
+                "自定义词典", value=config_manager.config.dictionary
+            )
+
+        async def save_global() -> None:
+            cfg = config_manager.config
+            cfg.update(
+                total_enable=total_enable.value,
+                enable_web=enable_web.value,
+                web_username=web_username.value,
+                web_password=web_password.value,
+                web_secret_key=web_secret_key.value,
+                KEYWORDS_SIZE=_int(keywords_size.value, cfg.KEYWORDS_SIZE),
+                cross_group_threshold=_int(
+                    cross_group_threshold.value, cfg.cross_group_threshold
                 ),
-            ),
-            message_table,
-        ],
-    ),
-)
-context_page = PageSchema(
-    url="/contexts",
-    icon="fa fa-comment",
-    label="学习内容",
-    schema=Page(
-        title="内容",
-        body=[
-            Alert(
-                level=LevelEnum.info,
-                className="white-space-pre-wrap",
-                body=(
-                    f"此数据库记录了{NICKNAME}所学习的内容。\n"
-                    '· 点击"回复列表"可以查看该条内容已学习到的可能的回复。\n'
-                    '· 点击"禁用"可以将该学习进行禁用，以后不会再学。\n'
-                    '· 点击"删除"可以删除该学习，让它重新开始学习这句话。'
-                ),
-            ),
-            context_table,
-        ],
-    ),
-)
-answer_page = PageSchema(
-    url="/answers",
-    icon="fa fa-commenting-o",
-    label="内容回复",
-    schema=Page(
-        title="回复",
-        body=[
-            Alert(
-                level=LevelEnum.info,
-                className="white-space-pre-wrap",
-                body=(
-                    f'此数据库记录了{NICKNAME}已学习到的所有回复，但看不到这些回复属于哪些内容，推荐到"学习内容"表进行操作。\n'
-                    '· 点击"禁用"可以将该回复进行禁用，以后不会再学。\n'
-                    '· 点击"删除"可以删除该回复，让它重新开始学习。'
-                ),
-            ),
-            answer_table,
-        ],
-    ),
-)
-blacklist_page = PageSchema(
-    url="/blacklist",
-    icon="fa fa-ban",
-    label="禁用列表",
-    schema=Page(
-        title="禁用列表",
-        body=[
-            Alert(
-                level=LevelEnum.info,
-                className="white-space-pre-wrap",
-                body=f"此数据库记录了{NICKNAME}被禁用的内容/关键词。\n"
-                "· 可以取消禁用，使其能够重新继续学习。\n"
-                "· 不能在此添加禁用，只能在群中回复[不可以]或者在<配置>中添加屏蔽词来达到禁用效果。",
-            ),
-            blacklist_table,
-        ],
-    ),
-)
-database_page = PageSchema(
-    label="数据库",
-    icon="fa fa-database",
-    children=[message_page, context_page, answer_page, blacklist_page],
-)
-config_page = PageSchema(
-    url="/configs",
-    isDefaultPage=True,
-    icon="fa fa-wrench",
-    label="配置",
-    schema=Page(
-        title="配置",
-        initApi="/learning_chat/api/get_group_list",
-        interval=60000,
-        body=[global_config_form, group_select, group_config_form],
-    ),
-)
-chat_page = PageSchema(
-    label="群聊学习", icon="fa fa-wechat (alias)", children=[config_page, database_page]
-)
+                learn_max_count=_int(learn_max_count.value, cfg.learn_max_count),
+                ban_words=ban_words.value,
+                ban_users=_int_list(ban_users.value),
+                dictionary=dictionary.value,
+            )
+            config_manager.save()
+            async with get_session() as session:
+                await session.execute(
+                    update(ChatContext)
+                    .where(ChatContext.count > cfg.learn_max_count)
+                    .values(count=cfg.learn_max_count)
+                )
+                await session.execute(
+                    update(ChatAnswer)
+                    .where(ChatAnswer.count > cfg.learn_max_count)
+                    .values(count=cfg.learn_max_count)
+                )
+                await session.commit()
+            jieba.load_userdict(cfg.dictionary)
+            ui.notify("保存成功", type="positive")
 
-github_logo = Tpl(
-    className="w-full",
-    tpl='<div class="flex justify-between"><div></div><div><a href="https://github.com/CMHopeSunshine/nonebot-plugin-learning-chat" target="_blank" title="Copyright"><i class="fa fa-github fa-2x"></i></a></div></div>',
-)
-header = Flex(
-    className="w-full", justify="flex-end", alignItems="flex-end", items=[github_logo]
-)
+        with ui.row().classes("gap-2"):
+            ui.button("保存全局配置", icon="save", on_click=save_global).props(
+                "color=positive"
+            )
 
-admin_app = App(
-    brandName="Learning-Chat",
-    logo="http://static.cherishmoon.fun/LittlePaimon/readme/logo.png",
-    header=header,
-    pages=[{"children": [config_page, database_page]}],
-    footer='<div class="p-2 text-center bg-blue-100">Copyright © 2021 - 2022 <a href="https://github.com/CMHopeSunshine/nonebot-plugin-learning-chat" target="_blank" class="link-secondary">Learning-Chat</a> X<a target="_blank" href="https://github.com/baidu/amis" class="link-secondary" rel="noopener"> amis v2.2.0</a></div>',
-)
+    with ui.card().classes("w-full p-4"):
+        ui.label("分群配置").classes("text-lg font-bold")
+        group_select = ui.select([], label="选择群")
+        group_panel = ui.column().classes("w-full")
+
+        async def load_groups() -> None:
+            try:
+                bots = get_adapter(Adapter).bots
+                if not bots:
+                    ui.notify("获取群列表失败，请确认已连接 GO-CQHTTP", type="warning")
+                    return
+                bot = next(iter(bots.values()))
+                groups = await bot.get_group_list()
+                group_select.options = [
+                    (f'{g.group_name}({g.group_id})', g.group_id)
+                    for g in groups
+                ]
+                group_select.update()
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"获取群列表失败: {e}", type="warning")
+
+        def on_group_change() -> None:
+            group_id = group_select.value
+            group_panel.clear()
+            if group_id is not None:
+                build_group_config(group_id, group_panel)
+
+        group_select.on_value_change(on_group_change)
+        ui.timer(0.1, load_groups, once=True)
+
+
+def build_group_config(group_id: int, slot: ui.column) -> None:
+    """Build the config form for a single group inside ``slot``."""
+    gc = config_manager.get_group_config(group_id)
+    with slot:
+        with ui.column().classes("w-full gap-3"):
+            enable = ui.switch("群聊学习开关", value=gc.enable)
+            answer_threshold = ui.number(
+                "回复阈值", value=gc.answer_threshold, min=2, precision=0
+            )
+            weights = ui.input_chips(
+                "回复阈值权重",
+                value=[str(w) for w in gc.answer_threshold_weights],
+            )
+            repeat_threshold = ui.number(
+                "复读阈值", value=gc.repeat_threshold, min=2, precision=0
+            )
+            break_probability = ui.number(
+                "打断复读概率",
+                value=gc.break_probability * 100,
+                min=0,
+                max=100,
+                precision=0,
+                suffix="%",
+            )
+            ban_words = ui.input_chips("屏蔽词", value=gc.ban_words)
+            ban_users = ui.input_chips(
+                "屏蔽用户", value=[str(u) for u in gc.ban_users]
+            )
+            speak_enable = ui.switch("主动发言开关", value=gc.speak_enable)
+            speak_threshold = ui.number(
+                "主动发言阈值", value=gc.speak_threshold, min=0, precision=0
+            )
+            speak_min_interval = ui.number(
+                "主动发言最小间隔",
+                value=gc.speak_min_interval,
+                min=0,
+                precision=0,
+                suffix="秒",
+            )
+            speak_continuously_probability = ui.number(
+                "连续主动发言概率",
+                value=gc.speak_continuously_probability * 100,
+                min=0,
+                max=100,
+                precision=0,
+                suffix="%",
+            )
+            speak_continuously_max_len = ui.number(
+                "最大连续主动发言句数",
+                value=gc.speak_continuously_max_len,
+                min=1,
+                precision=0,
+            )
+            speak_poke_probability = ui.number(
+                "主动发言附带戳一戳概率",
+                value=gc.speak_poke_probability * 100,
+                min=0,
+                max=100,
+                precision=0,
+                suffix="%",
+            )
+
+        def collect() -> dict | None:
+            try:
+                weights_list = [int(w) for w in weights.value]
+            except ValueError:
+                ui.notify("回复阈值权重必须为数字", type="negative")
+                return None
+            if not weights_list:
+                ui.notify("回复阈值权重不能为空，必须至少有一个数值", type="negative")
+                return None
+            return {
+                "enable": enable.value,
+                "answer_threshold": _int(answer_threshold.value, gc.answer_threshold),
+                "answer_threshold_weights": weights_list,
+                "repeat_threshold": _int(repeat_threshold.value, gc.repeat_threshold),
+                "break_probability": _float(
+                    break_probability.value, gc.break_probability * 100
+                )
+                / 100,
+                "ban_words": ban_words.value,
+                "ban_users": _int_list(ban_users.value),
+                "speak_enable": speak_enable.value,
+                "speak_threshold": _int(speak_threshold.value, gc.speak_threshold),
+                "speak_min_interval": _int(
+                    speak_min_interval.value, gc.speak_min_interval
+                ),
+                "speak_continuously_probability": _float(
+                    speak_continuously_probability.value,
+                    gc.speak_continuously_probability * 100,
+                )
+                / 100,
+                "speak_continuously_max_len": _int(
+                    speak_continuously_max_len.value, gc.speak_continuously_max_len
+                ),
+                "speak_poke_probability": _float(
+                    speak_poke_probability.value, gc.speak_poke_probability * 100
+                )
+                / 100,
+            }
+
+        def save() -> None:
+            data = collect()
+            if data is None:
+                return
+            gc.update(**data)
+            config_manager.save()
+            ui.notify("保存成功", type="positive")
+
+        async def save_all() -> None:
+            data = collect()
+            if data is None:
+                return
+            try:
+                bots = get_adapter(Adapter).bots
+                if not bots:
+                    ui.notify("获取群列表失败，请确认已连接 GO-CQHTTP", type="warning")
+                    return
+                bot = next(iter(bots.values()))
+                groups = await bot.get_group_list()
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"获取群列表失败: {e}", type="warning")
+                return
+            for group in groups:
+                cfg = config_manager.get_group_config(int(group.group_id))
+                cfg.update(**data)
+                config_manager.config.group_config[int(group.group_id)] = cfg
+            config_manager.save()
+            ui.notify("已保存至所有群", type="positive")
+
+        def reset() -> None:
+            slot.clear()
+            build_group_config(group_id, slot)
+
+        with ui.row().classes("gap-2"):
+            ui.button("保存", icon="save", on_click=save).props("color=positive")
+            ui.button(
+                "保存至所有群",
+                on_click=lambda: confirm(
+                    "保存至所有群",
+                    "确认将当前配置保存至所有群？",
+                    save_all,
+                ),
+            ).props("color=primary")
+            ui.button("重置", icon="restart_alt", on_click=reset)
+async def build_messages_page() -> None:
+    """Message records table."""
+    with ui.card().classes("w-full p-4"):
+        ui.label("群聊消息").classes("text-lg font-bold")
+        ui.label(
+            f"此数据库记录了{NICKNAME}收到的聊天记录。"
+            f"可以通过搜索{NICKNAME}的QQ号来查看它的回复记录。"
+        ).classes("text-sm text-gray-500")
+
+        async def fetch_messages(filters: dict, page: int) -> tuple[list[dict], int]:
+            conditions = [
+                _int_condition(ChatMessage.group_id, filters.get("group_id")),
+                _int_condition(ChatMessage.user_id, filters.get("user_id")),
+            ]
+            if raw := filters.get("raw_message"):
+                conditions.append(ChatMessage.raw_message.contains(raw))
+            async with get_session() as session:
+                total = (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ChatMessage)
+                        .where(*conditions)
+                    )
+                ) or 0
+                items = (
+                    await session.execute(
+                        select(
+                            ChatMessage.id,
+                            ChatMessage.message_id,
+                            ChatMessage.group_id,
+                            ChatMessage.user_id,
+                            ChatMessage.raw_message,
+                            ChatMessage.time,
+                        )
+                        .where(*conditions)
+                        .order_by(ChatMessage.time.desc())
+                        .offset((page - 1) * PER_PAGE)
+                        .limit(PER_PAGE)
+                    )
+                ).all()
+            rows = [
+                {
+                    "id": m.id,
+                    "message_id": m.message_id,
+                    "group_id": m.group_id,
+                    "user_id": m.user_id,
+                    "message": (m.raw_message or "")[:40],
+                    "raw_message": m.raw_message,
+                    "time": format_time(m.time),
+                }
+                for m in items
+            ]
+            return rows, total
+
+        async def ban_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    data = await session.get(ChatMessage, row["id"])
+                if data is None:
+                    ui.notify("禁用失败: 记录不存在", type="negative")
+                    return
+                await LearningChat.add_ban(data)
+                ui.notify("禁用成功", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"禁用失败: {e}", type="negative")
+
+        async def delete_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(
+                        delete(ChatMessage).where(ChatMessage.id == row["id"])
+                    )
+                    await session.commit()
+                ui.notify("删除成功", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"删除失败: {e}", type="negative")
+
+        async def delete_all() -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(delete(ChatMessage))
+                    await session.commit()
+                ui.notify("已删除所有聊天记录", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"删除失败: {e}", type="negative")
+
+        def show_detail(row: dict) -> None:
+            with ui.dialog() as dialog, ui.card().classes("p-4"):
+                ui.label("消息全文").classes("text-lg font-bold")
+                ui.label(row["raw_message"] or "").classes(
+                    "whitespace-pre-wrap break-all"
+                )
+                with ui.row().classes("w-full justify-end"):
+                    ui.button("关闭", on_click=dialog.close)
+            dialog.open()
+
+        await build_data_table(
+            columns=[
+                {"name": "id", "label": "ID", "field": "id", "align": "left"},
+                {"name": "message_id", "label": "消息ID", "field": "message_id"},
+                {"name": "group_id", "label": "群ID", "field": "group_id"},
+                {"name": "user_id", "label": "用户ID", "field": "user_id"},
+                {"name": "message", "label": "消息", "field": "message"},
+                {"name": "time", "label": "时间", "field": "time"},
+            ],
+            fetch=fetch_messages,
+            search_fields=[
+                ("group_id", "群 ID", "搜索群 ID"),
+                ("user_id", "用户 ID", "搜索用户 ID"),
+                ("raw_message", "消息", "搜索消息"),
+            ],
+            toolbar_buttons=[
+                (
+                    "删除所有聊天记录",
+                    "delete_sweep",
+                    lambda: confirm(
+                        "删除所有聊天记录",
+                        "确定要删除所有聊天记录吗？",
+                        delete_all,
+                    ),
+                )
+            ],
+            row_buttons=[
+                ("查看全文", "visibility", show_detail),
+                (
+                    "禁用",
+                    "block",
+                    lambda row: confirm(
+                        "禁用聊天记录",
+                        "禁用该聊天记录相关的学习内容和回复？",
+                        lambda: ban_selected(row),
+                    ),
+                ),
+                (
+                    "删除",
+                    "delete",
+                    lambda row: confirm(
+                        "删除聊天记录",
+                        "删除该条聊天记录？",
+                        lambda: delete_selected(row),
+                    ),
+                ),
+            ],
+        )
+
+
+async def build_contexts_page() -> None:
+    """Learned content table."""
+    with ui.card().classes("w-full p-4"):
+        ui.label("学习内容").classes("text-lg font-bold")
+        ui.label(
+            "此数据库记录了NICKNAME所学习的内容，可以查看每条内容已学习到的回复。"
+        ).classes("text-sm text-gray-500")
+
+        async def fetch_contexts(filters: dict, page: int) -> tuple[list[dict], int]:
+            conditions = []
+            if kw := filters.get("keywords"):
+                conditions.append(ChatContext.keywords.contains(kw))
+            async with get_session() as session:
+                total = (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ChatContext)
+                        .where(*conditions)
+                    )
+                ) or 0
+                items = (
+                    await session.execute(
+                        select(
+                            ChatContext.id,
+                            ChatContext.keywords,
+                            ChatContext.time,
+                            ChatContext.count,
+                        )
+                        .where(*conditions)
+                        .order_by(ChatContext.time.desc())
+                        .offset((page - 1) * PER_PAGE)
+                        .limit(PER_PAGE)
+                    )
+                ).all()
+            rows = [
+                {
+                    "id": c.id,
+                    "keywords": (c.keywords or "")[:40],
+                    "full_keywords": c.keywords,
+                    "time": format_time(c.time),
+                    "count": c.count,
+                }
+                for c in items
+            ]
+            return rows, total
+
+        async def show_answers(row: dict) -> None:
+            async with get_session() as session:
+                answers = (
+                    await session.execute(
+                        select(ChatAnswer.keywords, ChatAnswer.count)
+                        .where(ChatAnswer.context_id == row["id"])
+                        .order_by(ChatAnswer.count.desc())
+                    )
+                ).all()
+            with ui.dialog() as dialog, ui.card().classes("p-4 w-[640px] max-w-full"):
+                ui.label("回复列表").classes("text-lg font-bold")
+                ui.label(row["full_keywords"] or "").classes(
+                    "text-sm text-gray-500 break-all"
+                )
+                if not answers:
+                    ui.label("暂无回复").classes("text-gray-500")
+                for answer in answers:
+                    with ui.row().classes("w-full items-start gap-2 border-b py-1"):
+                        ui.label(f"x{answer.count}").classes("w-12")
+                        ui.label((answer.keywords or "")[:40]).classes(
+                            "flex-1 break-all"
+                        )
+                with ui.row().classes("w-full justify-end"):
+                    ui.button("关闭", on_click=dialog.close)
+            dialog.open()
+
+        async def ban_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    data = await session.get(ChatContext, row["id"])
+                if data is None:
+                    ui.notify("禁用失败: 记录不存在", type="negative")
+                    return
+                await LearningChat.add_ban(data)
+                ui.notify("禁用成功", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"禁用失败: {e}", type="negative")
+
+        async def delete_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(
+                        delete(ChatAnswer).where(ChatAnswer.context_id == row["id"])
+                    )
+                    await session.execute(
+                        delete(ChatContext).where(ChatContext.id == row["id"])
+                    )
+                    await session.commit()
+                ui.notify("删除成功", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"删除失败: {e}", type="negative")
+
+        async def delete_all() -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(delete(ChatContext))
+                    await session.commit()
+                ui.notify("已删除所有学习内容", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"删除失败: {e}", type="negative")
+
+        await build_data_table(
+            columns=[
+                {"name": "id", "label": "ID", "field": "id", "align": "left"},
+                {"name": "keywords", "label": "内容/关键词", "field": "keywords"},
+                {"name": "time", "label": "最后学习时间", "field": "time"},
+                {"name": "count", "label": "已学次数", "field": "count"},
+            ],
+            fetch=fetch_contexts,
+            search_fields=[("keywords", "内容/关键词", "搜索内容/关键词")],
+            toolbar_buttons=[
+                (
+                    "删除所有学习内容",
+                    "delete_sweep",
+                    lambda: confirm(
+                        "删除所有学习内容",
+                        "确定要删除所有已学习的内容吗？",
+                        delete_all,
+                    ),
+                )
+            ],
+            row_buttons=[
+                ("回复列表", "menu_book", show_answers),
+                (
+                    "禁用",
+                    "block",
+                    lambda row: confirm(
+                        "禁用学习内容",
+                        "禁用并删除该学习的内容及其所有回复？",
+                        lambda: ban_selected(row),
+                    ),
+                ),
+                (
+                    "删除",
+                    "delete",
+                    lambda row: confirm(
+                        "删除学习内容",
+                        "仅删除该学习的内容及其所有回复，但不禁用？",
+                        lambda: delete_selected(row),
+                    ),
+                ),
+            ],
+        )
+
+
+async def build_answers_page() -> None:
+    """Learned answers table."""
+    with ui.card().classes("w-full p-4"):
+        ui.label("内容回复").classes("text-lg font-bold")
+        ui.label(
+            "此数据库记录了NICKNAME已学习到的所有回复，推荐到「学习内容」页进行操作。"
+        ).classes("text-sm text-gray-500")
+
+        async def fetch_answers(filters: dict, page: int) -> tuple[list[dict], int]:
+            conditions = [_int_condition(ChatAnswer.group_id, filters.get("group_id"))]
+            if kw := filters.get("keywords"):
+                conditions.append(ChatAnswer.keywords.contains(kw))
+            async with get_session() as session:
+                total = (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ChatAnswer)
+                        .where(*conditions)
+                    )
+                ) or 0
+                items = (
+                    await session.execute(
+                        select(
+                            ChatAnswer.id,
+                            ChatAnswer.group_id,
+                            ChatAnswer.keywords,
+                            ChatAnswer.time,
+                            ChatAnswer.count,
+                            ChatAnswer.messages,
+                        )
+                        .where(*conditions)
+                        .order_by(ChatAnswer.count.desc())
+                        .offset((page - 1) * PER_PAGE)
+                        .limit(PER_PAGE)
+                    )
+                ).all()
+            rows = [
+                {
+                    "id": a.id,
+                    "group_id": a.group_id,
+                    "keywords": (a.keywords or "")[:40],
+                    "full_keywords": a.keywords,
+                    "time": format_time(a.time),
+                    "count": a.count,
+                    "messages": a.messages,
+                }
+                for a in items
+            ]
+            return rows, total
+
+        def show_messages(row: dict) -> None:
+            with ui.dialog() as dialog, ui.card().classes("p-4 w-[640px] max-w-full"):
+                ui.label("完整消息").classes("text-lg font-bold")
+                if not row["messages"]:
+                    ui.label("暂无消息").classes("text-gray-500")
+                for msg in row["messages"]:
+                    ui.label(msg).classes("break-all border-b py-1")
+                with ui.row().classes("w-full justify-end"):
+                    ui.button("关闭", on_click=dialog.close)
+            dialog.open()
+
+        async def ban_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    data = await session.get(ChatAnswer, row["id"])
+                if data is None:
+                    ui.notify("禁用失败: 记录不存在", type="negative")
+                    return
+                await LearningChat.add_ban(data)
+                ui.notify("禁用成功", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"禁用失败: {e}", type="negative")
+
+        async def delete_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(
+                        delete(ChatAnswer).where(ChatAnswer.id == row["id"])
+                    )
+                    await session.commit()
+                ui.notify("删除成功", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"删除失败: {e}", type="negative")
+
+        async def delete_all() -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(delete(ChatAnswer))
+                    await session.commit()
+                ui.notify("已删除所有已学习的回复", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"删除失败: {e}", type="negative")
+
+        await build_data_table(
+            columns=[
+                {"name": "id", "label": "ID", "field": "id", "align": "left"},
+                {"name": "group_id", "label": "群ID", "field": "group_id"},
+                {"name": "keywords", "label": "内容/关键词", "field": "keywords"},
+                {"name": "time", "label": "最后学习时间", "field": "time"},
+                {"name": "count", "label": "次数", "field": "count"},
+            ],
+            fetch=fetch_answers,
+            search_fields=[
+                ("group_id", "群 ID", "搜索群 ID"),
+                ("keywords", "内容/关键词", "搜索内容/关键词"),
+            ],
+            toolbar_buttons=[
+                (
+                    "删除所有已学习的回复",
+                    "delete_sweep",
+                    lambda: confirm(
+                        "删除所有已学习的回复",
+                        "确定要删除所有已学习的回复吗？",
+                        delete_all,
+                    ),
+                )
+            ],
+            row_buttons=[
+                ("完整消息", "message", show_messages),
+                (
+                    "禁用",
+                    "block",
+                    lambda row: confirm(
+                        "禁用回复",
+                        "禁用并删除该已学回复？",
+                        lambda: ban_selected(row),
+                    ),
+                ),
+                (
+                    "删除",
+                    "delete",
+                    lambda row: confirm(
+                        "删除回复",
+                        "仅删除该已学回复，不会禁用，所以依然能继续学？",
+                        lambda: delete_selected(row),
+                    ),
+                ),
+            ],
+        )
+
+
+async def build_blacklist_page() -> None:
+    """Blacklist table."""
+    with ui.card().classes("w-full p-4"):
+        ui.label("禁用列表").classes("text-lg font-bold")
+        ui.label(
+            "此数据库记录了NICKNAME被禁用的内容/关键词。"
+            "不能在此添加禁用，只能在群中回复「不可以」或在「配置」中添加屏蔽词来达到禁用效果。"
+        ).classes("text-sm text-gray-500")
+
+        async def fetch_blacklist(filters: dict, page: int) -> tuple[list[dict], int]:
+            keywords = filters.pop("keywords", None)
+            ban_keyword = filters.pop("bans", None)
+            stmt = select(ChatBlackList).order_by(ChatBlackList.id.desc())
+            if keywords:
+                stmt = stmt.where(ChatBlackList.keywords.contains(keywords))
+            async with get_session() as session:
+                items = (await session.scalars(stmt)).all()
+            rows = []
+            for item in items:
+                bans = (
+                    "全局禁用"
+                    if item.global_ban
+                    else (str(item.ban_group_id[0]) if item.ban_group_id else "")
+                )
+                if ban_keyword and ban_keyword not in bans:
+                    continue
+                rows.append(
+                    {
+                        "id": item.id,
+                        "keywords": (item.keywords or "")[:40],
+                        "full_keywords": item.keywords,
+                        "bans": bans,
+                    }
+                )
+            total = len(rows)
+            return rows[(page - 1) * PER_PAGE : page * PER_PAGE], total
+
+        async def unban_selected(row: dict) -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(
+                        delete(ChatBlackList).where(ChatBlackList.id == row["id"])
+                    )
+                    await session.commit()
+                ui.notify("已取消禁用，但该内容/关键词需要重新学习", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"操作失败: {e}", type="negative")
+
+        async def unban_all() -> None:
+            try:
+                async with get_session() as session:
+                    await session.execute(delete(ChatBlackList))
+                    await session.commit()
+                ui.notify("已取消所有禁用", type="positive")
+            except Exception as e:  # noqa: BLE001
+                ui.notify(f"操作失败: {e}", type="negative")
+
+        def show_detail(row: dict) -> None:
+            with ui.dialog() as dialog, ui.card().classes("p-4"):
+                ui.label("内容全文").classes("text-lg font-bold")
+                ui.label(row["full_keywords"] or "").classes("break-all")
+                with ui.row().classes("w-full justify-end"):
+                    ui.button("关闭", on_click=dialog.close)
+            dialog.open()
+
+        await build_data_table(
+            columns=[
+                {"name": "keywords", "label": "内容/关键词", "field": "keywords"},
+                {"name": "bans", "label": "已禁用的群", "field": "bans"},
+            ],
+            fetch=fetch_blacklist,
+            search_fields=[
+                ("keywords", "内容/关键词", "搜索内容/关键词"),
+                ("bans", "已禁用的群", "搜索已禁用的群"),
+            ],
+            toolbar_buttons=[
+                (
+                    "取消所有禁用",
+                    "check_circle",
+                    lambda: confirm(
+                        "取消所有禁用",
+                        "确定要取消所有禁用吗？",
+                        unban_all,
+                    ),
+                )
+            ],
+            row_buttons=[
+                ("查看全文", "visibility", show_detail),
+                (
+                    "取消禁用",
+                    "check_circle",
+                    lambda row: confirm(
+                        "取消禁用",
+                        "取消该被禁用的内容/关键词？取消后需要重新学习。",
+                        lambda: unban_selected(row),
+                    ),
+                ),
+            ],
+        )
+
+
+@ui.page("/admin")
+async def admin_page() -> None:
+    if not is_authenticated():
+        ui.navigate.to("/login")
+        return
+    with ui.header().classes("items-center justify-between"):
+        ui.label("Learning-Chat 后台管理").classes("text-lg font-bold")
+        with ui.row().classes("items-center gap-2"):
+            ui.link(
+                "GitHub",
+                "https://github.com/CMHopeSunshine/nonebot-plugin-learning-chat",
+                new_tab=True,
+            )
+            ui.button("退出登录", icon="logout", on_click=logout).props("flat")
+    with ui.left_drawer(value=True, bordered=False).classes("bg-gray-50"):
+        with ui.tabs().props("vertical").classes("w-full") as tabs:
+            tab_configs = ui.tab("configs", label="配置", icon="settings")
+            tab_messages = ui.tab("messages", label="群聊消息", icon="chat")
+            tab_contexts = ui.tab("contexts", label="学习内容", icon="article")
+            tab_answers = ui.tab("answers", label="内容回复", icon="reply")
+            tab_blacklist = ui.tab("blacklist", label="禁用列表", icon="block")
+    with ui.tab_panels(tabs, value=tab_configs).classes("w-full"):
+        with ui.tab_panel(tab_configs):
+            build_configs()
+        with ui.tab_panel(tab_messages):
+            await build_messages_page()
+        with ui.tab_panel(tab_contexts):
+            await build_contexts_page()
+        with ui.tab_panel(tab_answers):
+            await build_answers_page()
+        with ui.tab_panel(tab_blacklist):
+            await build_blacklist_page()

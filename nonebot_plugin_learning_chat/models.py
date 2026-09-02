@@ -1,61 +1,45 @@
-from nonebot_plugin_tortoise_orm import add_model
+from nonebot import require
 
-add_model(
-    __name__,
-    db_name="learning_chat",
-    db_url="sqlite://data/learning_chat/learning_chat.db",
-)
-
-import functools
+require("nonebot_plugin_orm")
 from functools import cached_property
-from typing import List
+
+from nonebot_plugin_orm import Model
+from sqlalchemy import JSON, ForeignKey
+from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 try:
-    import ujson as json
-except ImportError:
-    import json
-try:
-    import jieba_fast as jieba
-    import jieba_fast.analyse as jieba_analyse
+    import jieba_fast as jieba  # type: ignore
+    import jieba_fast.analyse as jieba_analyse  # type: ignore
 except ImportError:
     import jieba
     import jieba.analyse as jieba_analyse
-from tortoise import fields
-from tortoise.models import Model
-from .config import config_manager
 
+from .config import config_manager
 
 config = config_manager.config
 
-# DATABASE_PATH = Path() / "data" / "learning_chat" / "learning_chat.db"
-# DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-JSON_DUMPS = functools.partial(json.dumps, ensure_ascii=False)
 jieba.setLogLevel(jieba.logging.INFO)
 jieba.load_userdict(config.dictionary)  # 加载用户自定义的词典
 
 
 class ChatMessage(Model):
-    id: int = fields.IntField(pk=True, generated=True, auto_increment=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     """自增主键"""
-    group_id: int = fields.IntField()
+    group_id: Mapped[int]
     """群id"""
-    user_id: int = fields.IntField()
+    user_id: Mapped[int]
     """用户id"""
-    message_id: int = fields.IntField()
+    message_id: Mapped[int]
     """消息id"""
-    message: str = fields.TextField()
+    message: Mapped[str]
     """消息"""
-    raw_message: str = fields.TextField()
+    raw_message: Mapped[str]
     """原始消息"""
-    plain_text: str = fields.TextField()
+    plain_text: Mapped[str]
     """纯文本消息"""
-    time: int = fields.IntField()
+    time: Mapped[int]
     """时间戳"""
-
-    class Meta:
-        table = "message"
-        indexes = ("group_id", "time")
-        ordering = ["-time"]
 
     @cached_property
     def is_plain_text(self) -> bool:
@@ -63,11 +47,11 @@ class ChatMessage(Model):
         return "[CQ:" not in self.message
 
     @cached_property
-    def keyword_list(self) -> List[str]:
+    def keyword_list(self) -> list[str]:
         """获取纯文本部分的关键词列表"""
         if not self.is_plain_text and not len(self.plain_text):
             return []
-        return jieba_analyse.extract_tags(self.plain_text, topK=config.KEYWORDS_SIZE)
+        return jieba_analyse.extract_tags(self.plain_text, topK=config.KEYWORDS_SIZE) # type: ignore
 
     @cached_property
     def keywords(self) -> str:
@@ -80,60 +64,48 @@ class ChatMessage(Model):
 
 
 class ChatContext(Model):
-    id: int = fields.IntField(pk=True, generated=True, auto_increment=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     """自增主键"""
-    keywords: str = fields.TextField()
+    keywords: Mapped[str]
     """关键词"""
-    time: int = fields.IntField()
+    time: Mapped[int]
     """时间戳"""
-    count: int = fields.IntField(default=1)
+    count: Mapped[int] = mapped_column(default=1)
     """次数"""
-    answers: fields.ReverseRelation["ChatAnswer"]
+    answers: Mapped[list["ChatAnswer"]] = relationship(back_populates="context")
     """答案"""
-
-    class Meta:
-        table = "context"
-        indexes = ("keywords", "time")
-        ordering = ["-time"]
 
 
 class ChatAnswer(Model):
-    id: int = fields.IntField(pk=True, generated=True, auto_increment=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     """自增主键"""
-    keywords: str = fields.TextField()
+    keywords: Mapped[str]
     """关键词"""
-    group_id: int = fields.IntField()
+    group_id: Mapped[int]
     """群id"""
-    count: int = fields.IntField(default=1)
+    count: Mapped[int] = mapped_column(default=1)
     """次数"""
-    time: int = fields.IntField()
+    time: Mapped[int]
     """时间戳"""
-    messages: List[str] = fields.JSONField(encoder=JSON_DUMPS, default=list)
+    messages: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        default=list,
+    )
     """消息列表"""
 
-    context: fields.ForeignKeyNullableRelation[ChatContext] = fields.ForeignKeyField(
-        # db_name.models_name
-        "learning_chat.ChatContext",
-        related_name="answers",
-        null=True,
+    context_id: Mapped[int] = mapped_column(
+        ForeignKey("nonebot_plugin_learning_chat_chatcontext.id")
     )
-
-    class Meta:
-        table = "answer"
-        indexes = ("keywords", "time")
-        ordering = ["-time"]
-
+    context: Mapped["ChatContext"] = relationship(back_populates="answers")
 
 class ChatBlackList(Model):
-    id: int = fields.IntField(pk=True, generated=True, auto_increment=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     """自增主键"""
-    keywords: str = fields.TextField()
+    keywords: Mapped[str]
     """关键词"""
-    global_ban: bool = fields.BooleanField(default=False)
+    global_ban: Mapped[bool] = mapped_column(default=False)
     """是否全局禁用"""
-    ban_group_id: List[int] = fields.JSONField(default=list)
+    ban_group_id: Mapped[list[int]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list
+    )
     """禁用的群id"""
-
-    class Meta:
-        table = "blacklist"
-        indexes = ("keywords",)
