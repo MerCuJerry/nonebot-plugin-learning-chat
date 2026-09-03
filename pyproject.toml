@@ -111,6 +111,8 @@ ignore = [
     "RET505",
     "S311", # 不是这也不是安全目的啊
     "PLR2004",
+    "PLR0913",
+    "PERF203",
 ]
 
 [tool.nonebot]

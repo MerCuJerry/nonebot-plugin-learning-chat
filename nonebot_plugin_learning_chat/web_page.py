@@ -58,7 +58,7 @@ def confirm(title: str, message: str, on_confirm: Callable[[], Any]) -> None:
 
 def format_time(ts: int) -> str:
     return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%S"
+        "%Y-%m-%d %H:%M:%S",
     )
 
 
@@ -205,7 +205,7 @@ def login_page() -> None:
         )
         username = ui.input("用户名", placeholder="后台管理用户名，默认为 chat")
         password = ui.input(
-            "密码", password=True, placeholder="后台管理密码，默认为 admin"
+            "密码", password=True, placeholder="后台管理密码，默认为 admin",
         )
 
         def do_login() -> None:
