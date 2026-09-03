@@ -11,17 +11,17 @@ CONFIG_PATH = get_plugin_config_file("learning_chat.yml")
 
 try:
     NICKNAME: str = next(iter(Config.nickname))
-except Exception as _:  # noqa: BLE001
+except Exception as _:
     NICKNAME = "bot"
 
 try:
     COMMAND_START: str = next(iter(Config.command_start))
-except Exception as _:  # noqa: BLE001
+except Exception as _:
     COMMAND_START = "/"
 
 try:
     SUPERUSERS: set[str] = Config.superusers
-except Exception as _:  # noqa: BLE001
+except Exception as _:
     SUPERUSERS = set()
 
 class ChatGroupConfig(BaseModel):
@@ -75,9 +75,9 @@ class ChatConfigManager:
         self.file_path = CONFIG_PATH
         if self.file_path.exists():
             self.config = ChatConfig.model_validate(
-                yaml.load(
-                    self.file_path.read_text(encoding="utf-8"), Loader=yaml.Loader
-                )
+                yaml.safe_load(
+                    self.file_path.read_text(encoding="utf-8"),
+                ),
             )
         else:
             self.config = ChatConfig()

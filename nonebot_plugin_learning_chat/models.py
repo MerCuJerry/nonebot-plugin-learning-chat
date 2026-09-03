@@ -94,7 +94,7 @@ class ChatAnswer(Model):
     """消息列表"""
 
     context_id: Mapped[int] = mapped_column(
-        ForeignKey("nonebot_plugin_learning_chat_chatcontext.id")
+        ForeignKey("nonebot_plugin_learning_chat_chatcontext.id"),
     )
     context: Mapped["ChatContext"] = relationship(back_populates="answers")
 
@@ -106,6 +106,6 @@ class ChatBlackList(Model):
     global_ban: Mapped[bool] = mapped_column(default=False)
     """是否全局禁用"""
     ban_group_id: Mapped[list[int]] = mapped_column(
-        MutableList.as_mutable(JSON), default=list
+        MutableList.as_mutable(JSON), default=list,
     )
     """禁用的群id"""

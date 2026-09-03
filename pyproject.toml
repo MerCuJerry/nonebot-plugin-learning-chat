@@ -52,6 +52,67 @@ source-include = ["nonebot_plugin_learning_chat"]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.ruff.lint]
+select = [
+    "F",     # pyflakes
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "I",     # isort
+    "N",     # PEP8-naming
+    "UP",    # pyupgrade
+    "YTT",   # flake8-2020
+    "ASYNC", # flake8-async
+    "S",     # flake8-bandit
+    "BLE",   # flake8-blind-except
+    "FBT",   # flake8-boolean-trap
+    "B",     # flake8-bugbear
+    "A",     # flake8-builtins
+    "COM",   # flake8-commas
+    "C4",    # flake8-comprehensions
+    "DTZ",   # flake8-datetimez
+    "T10",   # flake8-debugger
+    "FA",    # flake8-future-annotations
+    "ISC",   # flake8-implicit-str-concat
+    "ICN",   # flake8-import-conventions
+    "PIE",   # flake8-pie
+    "T20",   # flake8-print
+    "PYI",   # flake8-pyi
+    "Q",     # flake8-quotes
+    "RSE",   # flake8-raise
+    "RET",   # flake8-return
+    "SLOT",  # flake8-slots
+    "SIM",   # flake8-simplify
+    "TID",   # flake8-tidy-imports
+    "TC",    # flake8-type-checking
+    "ARG",   # flake8-unused-arguments
+    "PTH",   # flake8-use-pathlib
+    # "ERA",   # eradicate
+    "PD",   # pandas-vet
+    "PGH",  # pygrep-hooks
+    "PL",   # pylint
+    "TRY",  # tryceratops
+    "FLY",  # flynt
+    "FAST", # FastAPI
+    "PERF", # Perflint
+    "FURB", # refurb
+    "RUF",  # Ruff-specific rules
+]
+ignore = [
+    "E501",
+    "BLE001",
+    "E402",
+    "PGH003",
+    "RUF003",
+    "RUF001",
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "S101",
+    "RET505",
+    "S311", # 不是这也不是安全目的啊
+    "PLR2004",
+]
+
 [tool.nonebot]
 plugin_dirs = []
 builtin_plugins = []

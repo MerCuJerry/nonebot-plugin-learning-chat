@@ -57,7 +57,9 @@ def confirm(title: str, message: str, on_confirm: Callable[[], Any]) -> None:
 
 
 def format_time(ts: int) -> str:
-    return datetime.datetime.fromtimestamp(ts, tz = datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
 
 def _int(value: float | None, default: int) -> int:
@@ -111,7 +113,7 @@ async def build_data_table(
 
     with ui.column().classes("w-full gap-2"):
         with ui.row().classes("w-full items-center gap-2 flex-wrap"):
-            for key, label, placeholder in (search_fields or []):
+            for key, label, placeholder in search_fields or []:
                 search_inputs[key] = ui.input(label, placeholder=placeholder)
 
             def do_search() -> None:
@@ -120,7 +122,7 @@ async def build_data_table(
 
             ui.button("搜索", icon="search", on_click=do_search)
 
-            for label, icon, callback in (toolbar_buttons or []):
+            for label, icon, callback in toolbar_buttons or []:
                 ui.button(label, icon=icon, on_click=callback).props("color=negative")
 
         @ui.refreshable
@@ -191,44 +193,53 @@ def login_page() -> None:
     if is_authenticated():
         ui.navigate.to("/admin")
         return
-    with ui.column().classes("absolute-center w-96 max-w-full"):
-        with ui.card().classes("w-full p-6"):
-            ui.label("Learning-Chat 后台管理").classes(
-                "text-2xl font-bold text-center mb-2"
-            )
-            ui.label("Nonebot-Plugin-Learning-Chat 控制台").classes(
-                "text-sm text-gray-500 text-center mb-4"
-            )
-            username = ui.input("用户名", placeholder="后台管理用户名，默认为 chat")
-            password = ui.input("密码", password=True, placeholder="后台管理密码，默认为 admin")
+    with (
+        ui.column().classes("absolute-center w-96 max-w-full"),
+        ui.card().classes("w-full p-6"),
+    ):
+        ui.label("Learning-Chat 后台管理").classes(
+            "text-2xl font-bold text-center mb-2",
+        )
+        ui.label("Nonebot-Plugin-Learning-Chat 控制台").classes(
+            "text-sm text-gray-500 text-center mb-4",
+        )
+        username = ui.input("用户名", placeholder="后台管理用户名，默认为 chat")
+        password = ui.input(
+            "密码", password=True, placeholder="后台管理密码，默认为 admin"
+        )
 
-            def do_login() -> None:
-                cfg = config_manager.config
-                if (
-                    username.value == cfg.web_username
-                    and password.value == cfg.web_password
-                ):
-                    app.storage.user["authenticated"] = True
-                    ui.navigate.to("/admin")
-                else:
-                    ui.notify("登录失败，请确认用户名和密码无误", type="negative")
+        def do_login() -> None:
+            cfg = config_manager.config
+            if (
+                username.value == cfg.web_username
+                and password.value == cfg.web_password
+            ):
+                app.storage.user["authenticated"] = True
+                ui.navigate.to("/admin")
+            else:
+                ui.notify("登录失败，请确认用户名和密码无误", type="negative")
 
-            ui.button("登录", icon="login", on_click=do_login).props(
-                "color=primary"
-            ).classes("w-full")
+        ui.button("登录", icon="login", on_click=do_login).props(
+            "color=primary",
+        ).classes("w-full")
+
+
 def build_configs() -> None:
     """Global config form and per-group config form."""
     with ui.card().classes("w-full p-4"):
         ui.label("全局配置").classes("text-lg font-bold")
         with ui.column().classes("w-full gap-3"):
             total_enable = ui.switch(
-                "群聊学习总开关", value=config_manager.config.total_enable
+                "群聊学习总开关",
+                value=config_manager.config.total_enable,
             )
             enable_web = ui.switch(
-                "后台管理总开关", value=config_manager.config.enable_web
+                "后台管理总开关",
+                value=config_manager.config.enable_web,
             )
             web_username = ui.input(
-                "后台管理用户名", value=config_manager.config.web_username
+                "后台管理用户名",
+                value=config_manager.config.web_username,
             )
             web_password = ui.input(
                 "后台管理密码",
@@ -236,7 +247,8 @@ def build_configs() -> None:
                 password=True,
             )
             web_secret_key = ui.input(
-                "后台管理 token 密钥", value=config_manager.config.web_secret_key
+                "后台管理 token 密钥",
+                value=config_manager.config.web_secret_key,
             )
             keywords_size = ui.number(
                 "单句关键词数量",
@@ -257,14 +269,16 @@ def build_configs() -> None:
                 precision=0,
             )
             ban_words = ui.input_chips(
-                "全局屏蔽词", value=config_manager.config.ban_words
+                "全局屏蔽词",
+                value=config_manager.config.ban_words,
             )
             ban_users = ui.input_chips(
                 "全局屏蔽用户",
                 value=[str(u) for u in config_manager.config.ban_users],
             )
             dictionary = ui.input_chips(
-                "自定义词典", value=config_manager.config.dictionary
+                "自定义词典",
+                value=config_manager.config.dictionary,
             )
 
         async def save_global() -> None:
@@ -277,7 +291,8 @@ def build_configs() -> None:
                 web_secret_key=web_secret_key.value,
                 KEYWORDS_SIZE=_int(keywords_size.value, cfg.KEYWORDS_SIZE),
                 cross_group_threshold=_int(
-                    cross_group_threshold.value, cfg.cross_group_threshold
+                    cross_group_threshold.value,
+                    cfg.cross_group_threshold,
                 ),
                 learn_max_count=_int(learn_max_count.value, cfg.learn_max_count),
                 ban_words=ban_words.value,
@@ -289,12 +304,12 @@ def build_configs() -> None:
                 await session.execute(
                     update(ChatContext)
                     .where(ChatContext.count > cfg.learn_max_count)
-                    .values(count=cfg.learn_max_count)
+                    .values(count=cfg.learn_max_count),
                 )
                 await session.execute(
                     update(ChatAnswer)
                     .where(ChatAnswer.count > cfg.learn_max_count)
-                    .values(count=cfg.learn_max_count)
+                    .values(count=cfg.learn_max_count),
                 )
                 await session.commit()
             jieba.load_userdict(cfg.dictionary)
@@ -302,7 +317,7 @@ def build_configs() -> None:
 
         with ui.row().classes("gap-2"):
             ui.button("保存全局配置", icon="save", on_click=save_global).props(
-                "color=positive"
+                "color=positive",
             )
 
     with ui.card().classes("w-full p-4"):
@@ -319,11 +334,10 @@ def build_configs() -> None:
                 bot = next(iter(bots.values()))
                 groups = await bot.get_group_list()
                 group_select.options = [
-                    (f'{g.group_name}({g.group_id})', g.group_id)
-                    for g in groups
+                    (f"{g.group_name}({g.group_id})", g.group_id) for g in groups
                 ]
                 group_select.update()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"获取群列表失败: {e}", type="warning")
 
         def on_group_change() -> None:
@@ -343,14 +357,20 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
         with ui.column().classes("w-full gap-3"):
             enable = ui.switch("群聊学习开关", value=gc.enable)
             answer_threshold = ui.number(
-                "回复阈值", value=gc.answer_threshold, min=2, precision=0
+                "回复阈值",
+                value=gc.answer_threshold,
+                min=2,
+                precision=0,
             )
             weights = ui.input_chips(
                 "回复阈值权重",
                 value=[str(w) for w in gc.answer_threshold_weights],
             )
             repeat_threshold = ui.number(
-                "复读阈值", value=gc.repeat_threshold, min=2, precision=0
+                "复读阈值",
+                value=gc.repeat_threshold,
+                min=2,
+                precision=0,
             )
             break_probability = ui.number(
                 "打断复读概率",
@@ -362,11 +382,15 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
             )
             ban_words = ui.input_chips("屏蔽词", value=gc.ban_words)
             ban_users = ui.input_chips(
-                "屏蔽用户", value=[str(u) for u in gc.ban_users]
+                "屏蔽用户",
+                value=[str(u) for u in gc.ban_users],
             )
             speak_enable = ui.switch("主动发言开关", value=gc.speak_enable)
             speak_threshold = ui.number(
-                "主动发言阈值", value=gc.speak_threshold, min=0, precision=0
+                "主动发言阈值",
+                value=gc.speak_threshold,
+                min=0,
+                precision=0,
             )
             speak_min_interval = ui.number(
                 "主动发言最小间隔",
@@ -413,7 +437,8 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
                 "answer_threshold_weights": weights_list,
                 "repeat_threshold": _int(repeat_threshold.value, gc.repeat_threshold),
                 "break_probability": _float(
-                    break_probability.value, gc.break_probability * 100
+                    break_probability.value,
+                    gc.break_probability * 100,
                 )
                 / 100,
                 "ban_words": ban_words.value,
@@ -421,7 +446,8 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
                 "speak_enable": speak_enable.value,
                 "speak_threshold": _int(speak_threshold.value, gc.speak_threshold),
                 "speak_min_interval": _int(
-                    speak_min_interval.value, gc.speak_min_interval
+                    speak_min_interval.value,
+                    gc.speak_min_interval,
                 ),
                 "speak_continuously_probability": _float(
                     speak_continuously_probability.value,
@@ -429,10 +455,12 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
                 )
                 / 100,
                 "speak_continuously_max_len": _int(
-                    speak_continuously_max_len.value, gc.speak_continuously_max_len
+                    speak_continuously_max_len.value,
+                    gc.speak_continuously_max_len,
                 ),
                 "speak_poke_probability": _float(
-                    speak_poke_probability.value, gc.speak_poke_probability * 100
+                    speak_poke_probability.value,
+                    gc.speak_poke_probability * 100,
                 )
                 / 100,
             }
@@ -456,7 +484,7 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
                     return
                 bot = next(iter(bots.values()))
                 groups = await bot.get_group_list()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"获取群列表失败: {e}", type="warning")
                 return
             for group in groups:
@@ -481,13 +509,15 @@ def build_group_config(group_id: int, slot: ui.column) -> None:
                 ),
             ).props("color=primary")
             ui.button("重置", icon="restart_alt", on_click=reset)
+
+
 async def build_messages_page() -> None:
     """Message records table."""
     with ui.card().classes("w-full p-4"):
         ui.label("群聊消息").classes("text-lg font-bold")
         ui.label(
             f"此数据库记录了{NICKNAME}收到的聊天记录。"
-            f"可以通过搜索{NICKNAME}的QQ号来查看它的回复记录。"
+            f"可以通过搜索{NICKNAME}的QQ号来查看它的回复记录。",
         ).classes("text-sm text-gray-500")
 
         async def fetch_messages(filters: dict, page: int) -> tuple[list[dict], int]:
@@ -502,7 +532,7 @@ async def build_messages_page() -> None:
                     await session.scalar(
                         select(func.count())
                         .select_from(ChatMessage)
-                        .where(*conditions)
+                        .where(*conditions),
                     )
                 ) or 0
                 items = (
@@ -518,7 +548,7 @@ async def build_messages_page() -> None:
                         .where(*conditions)
                         .order_by(ChatMessage.time.desc())
                         .offset((page - 1) * PER_PAGE)
-                        .limit(PER_PAGE)
+                        .limit(PER_PAGE),
                     )
                 ).all()
             rows = [
@@ -544,18 +574,18 @@ async def build_messages_page() -> None:
                     return
                 await LearningChat.add_ban(data)
                 ui.notify("禁用成功", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"禁用失败: {e}", type="negative")
 
         async def delete_selected(row: dict) -> None:
             try:
                 async with get_session() as session:
                     await session.execute(
-                        delete(ChatMessage).where(ChatMessage.id == row["id"])
+                        delete(ChatMessage).where(ChatMessage.id == row["id"]),
                     )
                     await session.commit()
                 ui.notify("删除成功", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"删除失败: {e}", type="negative")
 
         async def delete_all() -> None:
@@ -564,14 +594,14 @@ async def build_messages_page() -> None:
                     await session.execute(delete(ChatMessage))
                     await session.commit()
                 ui.notify("已删除所有聊天记录", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"删除失败: {e}", type="negative")
 
         def show_detail(row: dict) -> None:
             with ui.dialog() as dialog, ui.card().classes("p-4"):
                 ui.label("消息全文").classes("text-lg font-bold")
                 ui.label(row["raw_message"] or "").classes(
-                    "whitespace-pre-wrap break-all"
+                    "whitespace-pre-wrap break-all",
                 )
                 with ui.row().classes("w-full justify-end"):
                     ui.button("关闭", on_click=dialog.close)
@@ -601,7 +631,7 @@ async def build_messages_page() -> None:
                         "确定要删除所有聊天记录吗？",
                         delete_all,
                     ),
-                )
+                ),
             ],
             row_buttons=[
                 ("查看全文", "visibility", show_detail),
@@ -632,7 +662,7 @@ async def build_contexts_page() -> None:
     with ui.card().classes("w-full p-4"):
         ui.label("学习内容").classes("text-lg font-bold")
         ui.label(
-            "此数据库记录了NICKNAME所学习的内容，可以查看每条内容已学习到的回复。"
+            "此数据库记录了NICKNAME所学习的内容，可以查看每条内容已学习到的回复。",
         ).classes("text-sm text-gray-500")
 
         async def fetch_contexts(filters: dict, page: int) -> tuple[list[dict], int]:
@@ -644,7 +674,7 @@ async def build_contexts_page() -> None:
                     await session.scalar(
                         select(func.count())
                         .select_from(ChatContext)
-                        .where(*conditions)
+                        .where(*conditions),
                     )
                 ) or 0
                 items = (
@@ -658,7 +688,7 @@ async def build_contexts_page() -> None:
                         .where(*conditions)
                         .order_by(ChatContext.time.desc())
                         .offset((page - 1) * PER_PAGE)
-                        .limit(PER_PAGE)
+                        .limit(PER_PAGE),
                     )
                 ).all()
             rows = [
@@ -679,13 +709,13 @@ async def build_contexts_page() -> None:
                     await session.execute(
                         select(ChatAnswer.keywords, ChatAnswer.count)
                         .where(ChatAnswer.context_id == row["id"])
-                        .order_by(ChatAnswer.count.desc())
+                        .order_by(ChatAnswer.count.desc()),
                     )
                 ).all()
             with ui.dialog() as dialog, ui.card().classes("p-4 w-[640px] max-w-full"):
                 ui.label("回复列表").classes("text-lg font-bold")
                 ui.label(row["full_keywords"] or "").classes(
-                    "text-sm text-gray-500 break-all"
+                    "text-sm text-gray-500 break-all",
                 )
                 if not answers:
                     ui.label("暂无回复").classes("text-gray-500")
@@ -693,7 +723,7 @@ async def build_contexts_page() -> None:
                     with ui.row().classes("w-full items-start gap-2 border-b py-1"):
                         ui.label(f"x{answer.count}").classes("w-12")
                         ui.label((answer.keywords or "")[:40]).classes(
-                            "flex-1 break-all"
+                            "flex-1 break-all",
                         )
                 with ui.row().classes("w-full justify-end"):
                     ui.button("关闭", on_click=dialog.close)
@@ -708,21 +738,21 @@ async def build_contexts_page() -> None:
                     return
                 await LearningChat.add_ban(data)
                 ui.notify("禁用成功", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"禁用失败: {e}", type="negative")
 
         async def delete_selected(row: dict) -> None:
             try:
                 async with get_session() as session:
                     await session.execute(
-                        delete(ChatAnswer).where(ChatAnswer.context_id == row["id"])
+                        delete(ChatAnswer).where(ChatAnswer.context_id == row["id"]),
                     )
                     await session.execute(
-                        delete(ChatContext).where(ChatContext.id == row["id"])
+                        delete(ChatContext).where(ChatContext.id == row["id"]),
                     )
                     await session.commit()
                 ui.notify("删除成功", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"删除失败: {e}", type="negative")
 
         async def delete_all() -> None:
@@ -731,7 +761,7 @@ async def build_contexts_page() -> None:
                     await session.execute(delete(ChatContext))
                     await session.commit()
                 ui.notify("已删除所有学习内容", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"删除失败: {e}", type="negative")
 
         await build_data_table(
@@ -752,7 +782,7 @@ async def build_contexts_page() -> None:
                         "确定要删除所有已学习的内容吗？",
                         delete_all,
                     ),
-                )
+                ),
             ],
             row_buttons=[
                 ("回复列表", "menu_book", show_answers),
@@ -783,7 +813,7 @@ async def build_answers_page() -> None:
     with ui.card().classes("w-full p-4"):
         ui.label("内容回复").classes("text-lg font-bold")
         ui.label(
-            "此数据库记录了NICKNAME已学习到的所有回复，推荐到「学习内容」页进行操作。"
+            "此数据库记录了NICKNAME已学习到的所有回复，推荐到「学习内容」页进行操作。",
         ).classes("text-sm text-gray-500")
 
         async def fetch_answers(filters: dict, page: int) -> tuple[list[dict], int]:
@@ -793,9 +823,7 @@ async def build_answers_page() -> None:
             async with get_session() as session:
                 total = (
                     await session.scalar(
-                        select(func.count())
-                        .select_from(ChatAnswer)
-                        .where(*conditions)
+                        select(func.count()).select_from(ChatAnswer).where(*conditions),
                     )
                 ) or 0
                 items = (
@@ -811,7 +839,7 @@ async def build_answers_page() -> None:
                         .where(*conditions)
                         .order_by(ChatAnswer.count.desc())
                         .offset((page - 1) * PER_PAGE)
-                        .limit(PER_PAGE)
+                        .limit(PER_PAGE),
                     )
                 ).all()
             rows = [
@@ -848,18 +876,18 @@ async def build_answers_page() -> None:
                     return
                 await LearningChat.add_ban(data)
                 ui.notify("禁用成功", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"禁用失败: {e}", type="negative")
 
         async def delete_selected(row: dict) -> None:
             try:
                 async with get_session() as session:
                     await session.execute(
-                        delete(ChatAnswer).where(ChatAnswer.id == row["id"])
+                        delete(ChatAnswer).where(ChatAnswer.id == row["id"]),
                     )
                     await session.commit()
                 ui.notify("删除成功", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"删除失败: {e}", type="negative")
 
         async def delete_all() -> None:
@@ -868,7 +896,7 @@ async def build_answers_page() -> None:
                     await session.execute(delete(ChatAnswer))
                     await session.commit()
                 ui.notify("已删除所有已学习的回复", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"删除失败: {e}", type="negative")
 
         await build_data_table(
@@ -893,7 +921,7 @@ async def build_answers_page() -> None:
                         "确定要删除所有已学习的回复吗？",
                         delete_all,
                     ),
-                )
+                ),
             ],
             row_buttons=[
                 ("完整消息", "message", show_messages),
@@ -925,7 +953,7 @@ async def build_blacklist_page() -> None:
         ui.label("禁用列表").classes("text-lg font-bold")
         ui.label(
             "此数据库记录了NICKNAME被禁用的内容/关键词。"
-            "不能在此添加禁用，只能在群中回复「不可以」或在「配置」中添加屏蔽词来达到禁用效果。"
+            "不能在此添加禁用，只能在群中回复「不可以」或在「配置」中添加屏蔽词来达到禁用效果。",
         ).classes("text-sm text-gray-500")
 
         async def fetch_blacklist(filters: dict, page: int) -> tuple[list[dict], int]:
@@ -951,7 +979,7 @@ async def build_blacklist_page() -> None:
                         "keywords": (item.keywords or "")[:40],
                         "full_keywords": item.keywords,
                         "bans": bans,
-                    }
+                    },
                 )
             total = len(rows)
             return rows[(page - 1) * PER_PAGE : page * PER_PAGE], total
@@ -960,11 +988,11 @@ async def build_blacklist_page() -> None:
             try:
                 async with get_session() as session:
                     await session.execute(
-                        delete(ChatBlackList).where(ChatBlackList.id == row["id"])
+                        delete(ChatBlackList).where(ChatBlackList.id == row["id"]),
                     )
                     await session.commit()
                 ui.notify("已取消禁用，但该内容/关键词需要重新学习", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"操作失败: {e}", type="negative")
 
         async def unban_all() -> None:
@@ -973,7 +1001,7 @@ async def build_blacklist_page() -> None:
                     await session.execute(delete(ChatBlackList))
                     await session.commit()
                 ui.notify("已取消所有禁用", type="positive")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 ui.notify(f"操作失败: {e}", type="negative")
 
         def show_detail(row: dict) -> None:
@@ -1003,7 +1031,7 @@ async def build_blacklist_page() -> None:
                         "确定要取消所有禁用吗？",
                         unban_all,
                     ),
-                )
+                ),
             ],
             row_buttons=[
                 ("查看全文", "visibility", show_detail),
@@ -1034,13 +1062,15 @@ async def admin_page() -> None:
                 new_tab=True,
             )
             ui.button("退出登录", icon="logout", on_click=logout).props("flat")
-    with ui.left_drawer(value=True, bordered=False).classes("bg-gray-50"):
-        with ui.tabs().props("vertical").classes("w-full") as tabs:
-            tab_configs = ui.tab("configs", label="配置", icon="settings")
-            tab_messages = ui.tab("messages", label="群聊消息", icon="chat")
-            tab_contexts = ui.tab("contexts", label="学习内容", icon="article")
-            tab_answers = ui.tab("answers", label="内容回复", icon="reply")
-            tab_blacklist = ui.tab("blacklist", label="禁用列表", icon="block")
+    with (
+        ui.left_drawer(value=True, bordered=False).classes("bg-gray-50"),
+        ui.tabs().props("vertical").classes("w-full") as tabs,
+    ):
+        tab_configs = ui.tab("configs", label="配置", icon="settings")
+        tab_messages = ui.tab("messages", label="群聊消息", icon="chat")
+        tab_contexts = ui.tab("contexts", label="学习内容", icon="article")
+        tab_answers = ui.tab("answers", label="内容回复", icon="reply")
+        tab_blacklist = ui.tab("blacklist", label="禁用列表", icon="block")
     with ui.tab_panels(tabs, value=tab_configs).classes("w-full"):
         with ui.tab_panel(tab_configs):
             build_configs()
