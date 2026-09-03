@@ -40,19 +40,19 @@ __plugin_meta__ = PluginMetadata(
 )
 
 
-async def ChatRule(event: GroupMessageEvent, state: T_State) -> bool:
+async def chatrule(event: GroupMessageEvent, state: T_State) -> bool:
     if answers := await LearningChat(event).answer():
         state["answers"] = answers
         return True
     return False
 
-async def NotMe(event: GroupMessageEvent) -> bool:
+async def notme(event: GroupMessageEvent) -> bool:
     return event.data.sender_id != event.self_id
 
 learning_chat = on_message(
     priority=99,
     block=False,
-    rule=Rule(NotMe) & Rule(ChatRule),
+    rule=Rule(notme) & Rule(chatrule),
     permission=GROUP,
     state={
         "pm_name": "群聊学习",

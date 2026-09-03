@@ -334,14 +334,14 @@ def build_configs() -> None:
                 bot = next(iter(bots.values()))
                 groups = await bot.get_group_list()
                 group_select.options = [
-                    (f"{g.group_name}({g.group_id})", g.group_id) for g in groups
+                    (f"{g.group_name}", g.group_id) for g in groups
                 ]
                 group_select.update()
             except Exception as e:
                 ui.notify(f"获取群列表失败: {e}", type="warning")
 
         def on_group_change() -> None:
-            group_id = group_select.value
+            group_id = group_select.value[1]
             group_panel.clear()
             if group_id is not None:
                 build_group_config(group_id, group_panel)
@@ -662,7 +662,7 @@ async def build_contexts_page() -> None:
     with ui.card().classes("w-full p-4"):
         ui.label("学习内容").classes("text-lg font-bold")
         ui.label(
-            "此数据库记录了NICKNAME所学习的内容，可以查看每条内容已学习到的回复。",
+            f"此数据库记录了{NICKNAME}所学习的内容，可以查看每条内容已学习到的回复。",
         ).classes("text-sm text-gray-500")
 
         async def fetch_contexts(filters: dict, page: int) -> tuple[list[dict], int]:
@@ -813,7 +813,7 @@ async def build_answers_page() -> None:
     with ui.card().classes("w-full p-4"):
         ui.label("内容回复").classes("text-lg font-bold")
         ui.label(
-            "此数据库记录了NICKNAME已学习到的所有回复，推荐到「学习内容」页进行操作。",
+            f"此数据库记录了{NICKNAME}已学习到的所有回复，推荐到「学习内容」页进行操作。",
         ).classes("text-sm text-gray-500")
 
         async def fetch_answers(filters: dict, page: int) -> tuple[list[dict], int]:
@@ -952,7 +952,7 @@ async def build_blacklist_page() -> None:
     with ui.card().classes("w-full p-4"):
         ui.label("禁用列表").classes("text-lg font-bold")
         ui.label(
-            "此数据库记录了NICKNAME被禁用的内容/关键词。"
+            f"此数据库记录了{NICKNAME}被禁用的内容/关键词。"
             "不能在此添加禁用，只能在群中回复「不可以」或在「配置」中添加屏蔽词来达到禁用效果。",
         ).classes("text-sm text-gray-500")
 
