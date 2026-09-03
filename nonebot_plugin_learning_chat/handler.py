@@ -39,7 +39,7 @@ DISABLE_WORDS = [
 SORRY_WORDS = [
     f"{NICKNAME}知道错了...达咩!",
     f"{NICKNAME}不会再这么说了...",
-    f"果面呐噻,{NICKNAME}说错话 # 复杂度高点怎么你了了...",
+    f"果面呐噻,{NICKNAME}说错话了...",
 ]
 DOUBT_WORDS = [f"{NICKNAME}有说什么奇怪的话吗？"]
 BREAK_REPEAT_WORDS = ["打断复读", "打断！"]
@@ -215,9 +215,9 @@ class LearningChat:
                 # 检查权限
                 return [random.choice(NO_PERMISSION_WORDS)]
             if self.reply:
-                ban_result = await self._ban(message_id=self.reply.message_seq)
+                ban_result = await self._ban(self.data.group_id, message_id=self.reply.message_seq)
             else:
-                ban_result = await self._ban()
+                ban_result = await self._ban(self.data.group_id)
             if ban_result:
                 return [random.choice(SORRY_WORDS)]
             else:
@@ -395,7 +395,7 @@ class LearningChat:
             await asyncio.sleep(random.random() + 0.5)
             return [result_message]
 
-    async def _ban(self, message_id: int | None = None) -> bool:
+    async def _ban(self, group_id: int , message_id: int | None = None) -> bool:
         """屏蔽消息"""
         bots = get_adapter(Adapter).bots
         if len(bots) == 0:
@@ -411,7 +411,7 @@ class LearningChat:
                 return False
             keywords = message.keywords
             try:
-                await bot.delete_msg(message_id=message_id)
+                await bot.recall_group_message(group_id=group_id, message_seq=message_id)
             except ActionFailed:
                 log_info(
                     "群聊学习",
@@ -431,7 +431,7 @@ class LearningChat:
             # 没有指定消息ID，则屏蔽最后一条回复
             keywords = last_reply.keywords
             try:
-                await bot.delete_msg(message_id=last_reply.message_id)
+                await bot.recall_group_message(group_id=group_id, message_seq=last_reply.message_id)
             except ActionFailed:
                 log_info(
                     "群聊学习",
