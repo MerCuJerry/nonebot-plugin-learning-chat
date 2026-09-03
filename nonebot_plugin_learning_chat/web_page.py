@@ -521,12 +521,11 @@ async def build_messages_page() -> None:
         ).classes("text-sm text-gray-500")
 
         async def fetch_messages(filters: dict, page: int) -> tuple[list[dict], int]:
-            conditions = [
-                _int_condition(ChatMessage.group_id, filters.get("group_id")),
-                _int_condition(ChatMessage.user_id, filters.get("user_id")),
-            ]
-            if raw := filters.get("raw_message"):
-                conditions.append(ChatMessage.raw_message.contains(raw))
+            conditions = []
+            if gid := filters.get("group_id"):
+                conditions.append(ChatMessage.group_id == int(gid))
+            if uid := filters.get("user_id"):
+                conditions.append(ChatMessage.user_id == int(uid))
             async with get_session() as session:
                 total = (
                     await session.scalar(
@@ -542,7 +541,7 @@ async def build_messages_page() -> None:
                             ChatMessage.message_id,
                             ChatMessage.group_id,
                             ChatMessage.user_id,
-                            ChatMessage.raw_message,
+                            ChatMessage.plain_text,
                             ChatMessage.time,
                         )
                         .where(*conditions)
@@ -557,8 +556,7 @@ async def build_messages_page() -> None:
                     "message_id": m.message_id,
                     "group_id": m.group_id,
                     "user_id": m.user_id,
-                    "message": (m.raw_message or "")[:40],
-                    "raw_message": m.raw_message,
+                    "plain_text": (m.plain_text or "")[:40],
                     "time": format_time(m.time),
                 }
                 for m in items
@@ -600,7 +598,7 @@ async def build_messages_page() -> None:
         def show_detail(row: dict) -> None:
             with ui.dialog() as dialog, ui.card().classes("p-4"):
                 ui.label("消息全文").classes("text-lg font-bold")
-                ui.label(row["raw_message"] or "").classes(
+                ui.label(row["plain_text"] or "").classes(
                     "whitespace-pre-wrap break-all",
                 )
                 with ui.row().classes("w-full justify-end"):
@@ -613,14 +611,14 @@ async def build_messages_page() -> None:
                 {"name": "message_id", "label": "消息ID", "field": "message_id"},
                 {"name": "group_id", "label": "群ID", "field": "group_id"},
                 {"name": "user_id", "label": "用户ID", "field": "user_id"},
-                {"name": "message", "label": "消息", "field": "message"},
+                {"name": "plain_text", "label": "消息", "field": "plain_text"},
                 {"name": "time", "label": "时间", "field": "time"},
             ],
             fetch=fetch_messages,
             search_fields=[
                 ("group_id", "群 ID", "搜索群 ID"),
                 ("user_id", "用户 ID", "搜索用户 ID"),
-                ("raw_message", "消息", "搜索消息"),
+                ("plain_text", "消息", "搜索消息"),
             ],
             toolbar_buttons=[
                 (
@@ -817,9 +815,11 @@ async def build_answers_page() -> None:
         ).classes("text-sm text-gray-500")
 
         async def fetch_answers(filters: dict, page: int) -> tuple[list[dict], int]:
-            conditions = [_int_condition(ChatAnswer.group_id, filters.get("group_id"))]
+            conditions = []
             if kw := filters.get("keywords"):
                 conditions.append(ChatAnswer.keywords.contains(kw))
+            if gid := filters.get("group_id"):
+                conditions.append(ChatAnswer.group_id == int(gid))
             async with get_session() as session:
                 total = (
                     await session.scalar(

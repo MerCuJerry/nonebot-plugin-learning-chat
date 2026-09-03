@@ -64,28 +64,15 @@ class Result(IntEnum):
 
 class LearningChat:
     def __init__(self, event: GroupMessageEvent):
-        if event.reply:
-            self.reply = event.reply
-            self.data = ChatMessage(
-                group_id=event.data.peer_id,
-                user_id=event.data.sender_id,
-                message_id=event.data.message_seq,
-                message="".join([str(s) for s in event.data.message if s.is_text()]),
-                raw_message=event.get_plaintext(),
-                plain_text=event.get_plaintext(),
-                time=event.time,
-            )
-        else:
-            self.data = ChatMessage(
-                group_id=event.data.peer_id,
-                user_id=event.data.sender_id,
-                message_id=event.data.message_seq,
-                message="".join([str(s) for s in event.data.message if s.is_text()]),
-                raw_message=event.get_plaintext(),
-                plain_text=event.get_plaintext(),
-                time=event.time,
-            )
-            self.reply = None
+        self.reply = event.reply or None
+        self.data = ChatMessage(
+            group_id=event.data.peer_id,
+            user_id=event.data.sender_id,
+            message_id=event.data.message_seq,
+            message="".join([str(s) for s in event.data.message if s.is_text()]),
+            plain_text=event.get_plaintext(),
+            time=event.time,
+        )
         self.bot_id = event.self_id
         self.to_me = event.to_me or NICKNAME in self.data.message
         assert event.data.group_member is not None
@@ -197,7 +184,7 @@ class LearningChat:
             # 不符合任何情况，跳过
             return Result.Pass
 
-    async def answer(self) -> list[MessageSegment | str] | None:
+    async def answer(self) -> MessageSegment | None:
         """获取这句话的回复"""
         self.session = get_session(expire_on_commit=False)
         try:
@@ -205,7 +192,7 @@ class LearningChat:
         finally:
             await self.session.close()
 
-    async def _answer(self) -> list[MessageSegment | str] | None:
+    async def _answer(self) -> MessageSegment | None:
         result = await self._learn()
         self.session.add(self.data)
         await self.session.commit()
@@ -213,19 +200,19 @@ class LearningChat:
             # 禁用某句话
             if self.role not in {"superuser", "admin", "owner"}:
                 # 检查权限
-                return [random.choice(NO_PERMISSION_WORDS)]
+                return MessageSegment.text(random.choice(NO_PERMISSION_WORDS))
             if self.reply:
                 ban_result = await self._ban(self.data.group_id, message_id=self.reply.message_seq)
             else:
                 ban_result = await self._ban(self.data.group_id)
             if ban_result:
-                return [random.choice(SORRY_WORDS)]
+                return MessageSegment.text(random.choice(SORRY_WORDS))
             else:
-                return [random.choice(DOUBT_WORDS)]
+                return MessageSegment.text(random.choice(DOUBT_WORDS))
         elif result in [Result.SetEnable, Result.SetDisable]:
             # 检查权限
             if self.role not in {"superuser", "admin", "owner"}:
-                return [random.choice(NO_PERMISSION_WORDS)]
+                return MessageSegment.text(random.choice(NO_PERMISSION_WORDS))
             self.config.update(enable=(result == Result.SetEnable))
             config_manager.config.group_config[self.data.group_id] = self.config
             config_manager.save()
@@ -233,11 +220,11 @@ class LearningChat:
                 "群聊学习",
                 f"群<m>{self.data.group_id}</m>{'开启' if result == Result.SetEnable else '关闭'}学习功能",
             )
-            return [
+            return MessageSegment.text(
                 random.choice(
                     ENABLE_WORDS if result == Result.SetEnable else DISABLE_WORDS,
                 ),
-            ]
+            )
         elif result == Result.Pass:
             # 跳过
             return None
@@ -280,13 +267,13 @@ class LearningChat:
             ):
                 if random.random() < self.config.break_probability:
                     log_debug("群聊学习", "➤➤达到复读阈值，打断复读！")
-                    return [random.choice(BREAK_REPEAT_WORDS)]
+                    return MessageSegment.text(random.choice(BREAK_REPEAT_WORDS))
                 else:
                     log_debug(
                         "群聊学习",
                         f"➤➤达到复读阈值，复读<m>{messages[0].message}</m>",
                     )
-                    return [self.data.message]
+                    return MessageSegment.text(self.data.message)
             return None
         else:
             # 回复
@@ -393,7 +380,7 @@ class LearningChat:
             result_message = random.choice(result.messages)
             log_debug("群聊学习", f"➤➤将回复<m>{result_message}</m>")
             await asyncio.sleep(random.random() + 0.5)
-            return [result_message]
+            return MessageSegment.text(result_message)
 
     async def _ban(self, group_id: int , message_id: int | None = None) -> bool:
         """屏蔽消息"""

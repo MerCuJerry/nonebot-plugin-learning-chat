@@ -68,7 +68,7 @@ async def _(matcher: Matcher, event: GroupMessageEvent, answers=Arg("answers")):
     for answer in answers:
         try:
             logger.info(
-                "群聊学习", f'{NICKNAME}将向群<m>{event.data.peer_id}</m>回复<m>"{answer}"</m>'
+                "群聊学习", f'{NICKNAME}将向群<m>{event.data.peer_id}</m>回复<m>"{answer}"</m>',
             )
             msg = await matcher.send(Message(answer))
             async with get_session(expire_on_commit=False) as session:
@@ -78,10 +78,9 @@ async def _(matcher: Matcher, event: GroupMessageEvent, answers=Arg("answers")):
                         user_id=event.data.sender_id,
                         message_id=msg.message_seq,
                         message=answer,
-                        raw_message=answer,
                         time=int(time.time()),
                         plain_text=Message(answer).extract_plain_text(),
-                    )
+                    ),
                 )
                 await session.commit()
             await sleep(random.random() + 0.5)
@@ -111,7 +110,7 @@ async def speak_up():
         try:
             logger.info("群聊学习", f'{NICKNAME}向群<m>{group_id}</m>主动发言<m>"{msg}"</m>')
             send_result = await bot.send_group_msg(
-                group_id=group_id, message=Message(msg)
+                group_id=group_id, message=Message(msg),
             )
             async with get_session(expire_on_commit=False) as session:
                 session.add(
@@ -120,10 +119,9 @@ async def speak_up():
                         user_id=int(bot.self_id),
                         message_id=send_result.message_seq,
                         message=msg,
-                        raw_message=msg,
                         time=int(time.time()),
                         plain_text=Message(msg).extract_plain_text(),
-                    )
+                    ),
                 )
                 await session.commit()
             await sleep(random.randint(2, 4))

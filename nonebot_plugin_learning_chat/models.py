@@ -34,8 +34,6 @@ class ChatMessage(Model):
     """消息id"""
     message: Mapped[str]
     """消息"""
-    raw_message: Mapped[str]
-    """原始消息"""
     plain_text: Mapped[str]
     """纯文本消息"""
     time: Mapped[int]
