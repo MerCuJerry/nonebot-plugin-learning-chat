@@ -64,6 +64,8 @@ class Result(IntEnum):
 
 class LearningChat:
     def __init__(self, event: GroupMessageEvent):
+        if event.get_plaintext() == "":
+            return
         self.reply = event.reply or None
         self.data = ChatMessage(
             group_id=event.data.peer_id,
